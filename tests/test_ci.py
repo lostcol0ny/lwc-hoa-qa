@@ -71,3 +71,26 @@ def test_build_corpus_llm_cleanup_is_opt_in() -> None:
     # Every other path builds with --no-llm.
     assert step["run"].count("build --out build/ --no-llm") == 1
     assert '[ "$LLM_CLEANUP" = true ] && [ -n "$ANTHROPIC_API_KEY" ]' in step["run"]
+
+
+def test_eval_workflow_is_manual_and_skips_without_secrets() -> None:
+    workflow = load_workflow("eval.yml")
+    assert set(workflow[True]) == {"workflow_dispatch"}  # never on push or PRs
+    job = workflow["jobs"]["eval"]
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    steps = job["steps"]
+    check = steps[0]
+    assert check["id"] == "secrets"
+    assert set(check["env"]) == {"TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"}
+    assert "GITHUB_STEP_SUMMARY" in check["run"]
+    # Every later step is gated on the secrets check.
+    for step in steps[1:]:
+        assert "steps.secrets.outputs.enabled == 'true'" in step["if"]
+    (run,) = [s for s in steps if "hoa-qa eval" in s.get("run", "")]
+    assert "--json eval-results.json" in run["run"]
+    assert "${{" not in run["run"]  # inputs reach the shell via env only
+    assert run["env"]["TYPESAFE_API_KEY"] == "${{ secrets.TYPESAFE_API_KEY }}"
+    (build,) = [s for s in steps if "hoa_qa.ingest build" in s.get("run", "")]
+    assert "--no-llm" in build["run"]
+    uploads = [s for s in steps if s.get("uses", "").startswith("actions/upload-")]
+    assert uploads and "eval-results.json" in uploads[0]["with"]["path"]
