@@ -23,6 +23,7 @@ from hoa_qa.answer.pricing import (
 )
 from hoa_qa.ask import QASettings, max_cost_usd
 from hoa_qa.models import Corpus, Outcome
+from hoa_qa.retrieval.sweep import plan_passages
 
 HAIKU = ANSWER_MODEL_PRICES["claude-haiku-4-5"]
 
@@ -89,6 +90,26 @@ def test_sweep_partial_failure_cost_reaches_ask_result(
     assert result.jev_input_tokens == sum(jev.billed)
     assert result.estimated_cost_usd == pytest.approx(expected_usd(jev, provider))
     assert provider.prompts == []
+
+
+@pytest.mark.parametrize("where", ["gate", "sweep", "support"])
+def test_billed_malformed_jev_response_cost_reaches_ask_result(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, where: str
+) -> None:
+    """B3: a billed response missing a judgment still counts, with siblings."""
+    predicates = {
+        "gate": lambda state: "message" in state,
+        "sweep": lambda state: state.get("document") == "LWC Bylaws",
+        "support": lambda state: "claims" in state,
+    }
+    jev.malformed = predicates[where]
+    provider = FakeProvider([FINES_DRAFT])
+    result = run(corpus, settings, jev, provider)
+    assert result.answer.outcome is Outcome.error
+    assert result.jev_input_tokens == sum(jev.billed) > 0
+    assert result.estimated_cost_usd == pytest.approx(expected_usd(jev, provider))
+    if where == "sweep":
+        assert len(jev.billed) == 1 + 7  # gate + all 7 sweep batches, incl. bad
 
 
 def test_support_failure_cost_reaches_ask_result(
@@ -178,11 +199,12 @@ def test_max_cost_bounds_estimated_cost(
 
 
 def test_max_cost_value_for_mini_corpus(corpus: Corpus, settings: QASettings) -> None:
-    bound = max_cost_usd(corpus, settings, settings.answer_model)
-    # Two full-length Haiku outputs alone are 2 * 4096 * $5/MTok = $0.04096.
-    assert 0.04096 < bound < 0.1
-    pricier = max_cost_usd(corpus, settings, "claude-opus-5")
-    assert pricier > bound
+    passages = plan_passages(corpus.chunks).passages
+    bound = max_cost_usd(passages, settings, settings.answer_model, 2048)
+    # Two full-length Haiku outputs alone are 2 * 2048 * $5/MTok = $0.02048.
+    assert 0.02048 < bound < 0.1
+    assert max_cost_usd(passages, settings, "claude-opus-5", 2048) > bound
+    assert max_cost_usd(passages, settings, settings.answer_model, 4096) > bound
 
 
 # --- logging ---------------------------------------------------------------------

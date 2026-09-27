@@ -6,6 +6,7 @@ budget reserves before each call. Providers are injectable so tests use fakes.
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -26,8 +27,9 @@ from hoa_qa.answer.prompt import (
     render_passage,
 )
 from hoa_qa.answer.provider import (
+    ANSWER_SCHEMA,
     DEFAULT_ANSWER_MODEL,
-    MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
     AnswerDraft,
     AnswerProvider,
     AnthropicAnswerProvider,
@@ -36,21 +38,27 @@ from hoa_qa.models import Answer, Chunk, Citation, Corpus, Outcome, citation_url
 from hoa_qa.retrieval.gate import GATE_QUESTION, run_gate
 from hoa_qa.retrieval.jev import (
     DEFAULT_LIMITS,
+    MAX_QUESTION_CHARS,
+    WORST_QUESTION,
     JevClient,
     JevLimits,
     PartialCostError,
     TokenCounter,
     TypeSafeJevClient,
+    byte_bound_tokens,
     conservative_tokens,
-    request_tokens,
 )
-from hoa_qa.retrieval.sweep import batch_request, plan_batches, sweep
+from hoa_qa.retrieval.sweep import (
+    SweepPassage,
+    batch_request,
+    plan_passages,
+    sweep,
+)
 from hoa_qa.verify.quotes import CheckedCitation, check_quotes, normalize
 from hoa_qa.verify.support import ClaimEvidence, check_support, support_request
 
 logger = logging.getLogger(__name__)
 
-MAX_QUESTION_CHARS = 500
 DEFAULT_DOCUMENTS_URL = "https://lakewoodcreekhoa.com/"
 
 DISCLAIMER = (
@@ -67,8 +75,8 @@ OMITTED_NOTE = (
     "Some details could not be verified against the documents and were left out."
 )
 
-# Allowance for message framing and the structured-output schema that the
-# rendered prompt text does not include.
+# Framing the Messages API adds beyond the prompt text and the output schema
+# (role markers, special tokens, the structured-output instructions).
 ANSWER_REQUEST_OVERHEAD_TOKENS = 2_048
 
 
@@ -85,6 +93,7 @@ class QASettings(BaseModel):
     sweep_threshold: float = Field(default=0.3, ge=0, le=1)
     sweep_top_k: int = Field(default=8, ge=1)
     jev_concurrency: int = Field(default=4, ge=1)
+    answer_max_tokens: int = Field(default=DEFAULT_MAX_OUTPUT_TOKENS, ge=256, le=16_000)
     support_threshold: float = Field(default=0.5, ge=0, le=1)
     documents_url: str = DEFAULT_DOCUMENTS_URL
 
@@ -102,6 +111,7 @@ class QASettings(BaseModel):
             # SWEEP_CONCURRENCY is the original name, kept as a fallback.
             "jev_concurrency": ("JEV_CONCURRENCY", "SWEEP_CONCURRENCY"),
             "support_threshold": ("SUPPORT_THRESHOLD",),
+            "answer_max_tokens": ("ANSWER_MAX_TOKENS",),
             "documents_url": ("HOA_DOCUMENTS_URL",),
         }
         # Empty values (as in .env.example) mean "use the default".
@@ -195,8 +205,11 @@ class QAAsker:
         self._provider = provider
         self._count_tokens = count_tokens
         self._limits = limits
+        # How each chunk is sent is fixed per corpus (sized for the longest
+        # question), so the sweep's work, and its cost bound, are too.
+        self._plan = plan_passages(corpus.chunks, count_tokens, limits)
         self._max_cost_usd = max_cost_usd(
-            corpus, settings, provider.model, count_tokens, limits
+            self._plan.passages, settings, provider.model, provider.max_tokens
         )
 
     @property
@@ -283,7 +296,7 @@ class QAAsker:
         swept = await sweep(
             self._jev,
             cleaned,
-            self._corpus.chunks,
+            self._plan.passages,
             top_k=s.sweep_top_k,
             threshold=s.sweep_threshold,
             limit=limit,
@@ -421,61 +434,64 @@ def _citation(checked: CheckedCitation) -> Citation:
 
 
 def max_cost_usd(
-    corpus: Corpus,
+    passages: Sequence[SweepPassage],
     settings: QASettings,
     answer_model: str,
-    count_tokens: TokenCounter = conservative_tokens,
-    limits: JevLimits = DEFAULT_LIMITS,
+    answer_max_tokens: int,
 ) -> float:
-    """Conservative upper bound on one ``ask`` call's spend (docs/qa-core.md).
+    """Provable upper bound on one ``ask`` call's spend (docs/qa-core.md).
 
-    Every text is sized with the worst case the pipeline allows: a question of
-    MAX_QUESTION_CHARS four-byte characters, the largest chunks in the corpus,
-    MAX_CLAIMS claims of MAX_STATEMENT_CHARS four-byte characters each citing
-    the MAX_CITATIONS_PER_CLAIM largest chunks, and full MAX_OUTPUT_TOKENS
-    output on both answer attempts.
+    Input tokens use ``byte_bound_tokens`` / UTF-8 bytes (a token covers at
+    least one byte) and the worst input the pipeline accepts: a question of
+    MAX_QUESTION_CHARS 4-byte characters. The sweep charges every planned
+    passage as its own request (packing only removes repeated bytes), the
+    support check charges MAX_CLAIMS single-claim requests citing the
+    corpus's largest serialized passages, and the answer model is charged its
+    largest possible prompt and full output on both attempts.
     """
-    worst_question = "\U0001d538" * MAX_QUESTION_CHARS
     worst_statement = "\U0001d538" * MAX_STATEMENT_CHARS
-    chunks = sorted(
-        corpus.chunks, key=lambda c: count_tokens(render_passage(c)), reverse=True
+    chunks = list({p.chunk.id: p.chunk for p in passages}.values())
+
+    gate = byte_bound_tokens({"message": WORST_QUESTION}, {"on_topic": GATE_QUESTION})
+    sweep_tokens = sum(
+        byte_bound_tokens(*batch_request(WORST_QUESTION, [passage]))
+        for passage in passages
     )
 
-    gate = request_tokens(
-        {"message": worst_question}, {"on_topic": GATE_QUESTION}, count_tokens
-    )
-    plan = plan_batches(worst_question, corpus.chunks, count_tokens, limits)
-    sweep_tokens = sum(
-        request_tokens(*batch_request(worst_question, batch), count_tokens)[0]
-        for batch in plan.batches
-    )
-    # Packing claims together never costs more than one request per claim.
+    # Largest chunks by their serialized size inside a support request.
+    def support_bytes(chunk: Chunk) -> int:
+        return len(json.dumps(chunk.text_clean, ensure_ascii=False).encode("utf-8"))
+
+    widest = sorted(chunks, key=support_bytes, reverse=True)
     worst_claim = ClaimEvidence(
         statement=worst_statement,
         citations=tuple(
-            CheckedCitation(chunk=c, quote="") for c in chunks[:MAX_CITATIONS_PER_CLAIM]
+            CheckedCitation(chunk=c, quote="") for c in widest[:MAX_CITATIONS_PER_CLAIM]
         ),
     )
-    support_tokens = (
-        MAX_CLAIMS * request_tokens(*support_request([worst_claim]), count_tokens)[0]
-    )
-    jev_tokens = gate[0] + sweep_tokens + 2 * support_tokens
+    support_tokens = MAX_CLAIMS * byte_bound_tokens(*support_request([worst_claim]))
+    jev_tokens = gate + sweep_tokens + 2 * support_tokens
 
     # The retry prompt (with failed claims listed) is the larger of the two.
+    biggest = sorted(
+        chunks, key=lambda c: len(render_passage(c).encode("utf-8")), reverse=True
+    )
     prompt = build_prompt(
-        worst_question,
-        chunks[: settings.sweep_top_k],
+        WORST_QUESTION,
+        biggest[: settings.sweep_top_k],
         failed_claims=[worst_statement] * MAX_CLAIMS,
     )
     answer_input = (
-        count_tokens(prompt.system + prompt.user) + ANSWER_REQUEST_OVERHEAD_TOKENS
+        len((prompt.system + prompt.user).encode("utf-8"))
+        + len(json.dumps(ANSWER_SCHEMA).encode("utf-8"))
+        + ANSWER_REQUEST_OVERHEAD_TOKENS
     )
     price = answer_price(answer_model)
     answer_usd = (
         2
         * (
             answer_input * price.input_usd_per_mtok
-            + MAX_OUTPUT_TOKENS * price.output_usd_per_mtok
+            + answer_max_tokens * price.output_usd_per_mtok
         )
         / 1_000_000
     )
@@ -527,6 +543,7 @@ def build_asker(
         provider = AnthropicAnswerProvider(
             api_key=settings.anthropic_api_key.get_secret_value(),
             model=settings.answer_model,
+            max_tokens=settings.answer_max_tokens,
         )
     return QAAsker(corpus, settings, jev, provider, count_tokens, limits)
 

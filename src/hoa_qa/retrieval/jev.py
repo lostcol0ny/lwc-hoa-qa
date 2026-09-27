@@ -4,13 +4,20 @@ Callers describe yes/no judgments as ``NoulQuestion`` values and get back plain
 probabilities plus the billed input tokens, so everything above this module can
 be tested with a fake ``JevClient``.
 
-Request sizing. The SDK exposes no tokenizer or token-counting endpoint (only
-``/v1/systemone`` and ``/v1/models``), so sizes use a deliberately conservative
-bound: one token per ``ASCII_BYTES_PER_TOKEN`` ASCII bytes (about 1.6-1.8x the
-~4-4.5 characters/token typical of English) plus one token per non-ASCII
-UTF-8 byte (the byte-fallback worst case), plus fixed per-request and
-per-question overheads for the JSON envelope, question names, and criteria
-keys. ``pack`` never emits a group over either Jev limit.
+The SDK exposes no tokenizer or token-counting endpoint (only
+``/v1/systemone`` and ``/v1/models``), so there are two estimators:
+
+- ``conservative_tokens`` is a *packing heuristic* for the Jev request limits:
+  ASCII bytes / ``ASCII_BYTES_PER_TOKEN`` plus one token per non-ASCII byte,
+  plus fixed per-request and per-question overheads. ``pack`` never emits a
+  group over either limit under it. Text that tokenizes worse than the
+  heuristic can still exceed a limit; the API then rejects the request, which
+  fails closed (``error`` outcome, partial cost counted), never overspends.
+- ``byte_bound_tokens`` is a *provable upper bound* used for money
+  (``max_cost_usd``): at most one token per UTF-8 byte of the request body
+  (byte-level BPE and SentencePiece with byte fallback both emit tokens that
+  each cover at least one byte), plus bounded framing overhead per request
+  and per question.
 """
 
 import asyncio
@@ -29,8 +36,18 @@ MAX_REQUEST_TOKENS = 64_000
 MAX_STATE_TOKENS = 32_000
 
 ASCII_BYTES_PER_TOKEN = 2.5
+# Framing the provider adds around the request body (prompt template, model
+# field, special tokens), per request and per question.
 REQUEST_OVERHEAD_TOKENS = 256
 QUESTION_OVERHEAD_TOKENS = 32
+# Bound-only slack per question for question-name/index digits when passages
+# are packed together (``p12345`` vs ``p0``, three occurrences per question).
+INDEX_SLACK_TOKENS = 16
+
+# Longest question ask() accepts, and the worst case for every estimator:
+# 4 UTF-8 bytes per character, which is the maximum.
+MAX_QUESTION_CHARS = 500
+WORST_QUESTION = "\U0001d538" * MAX_QUESTION_CHARS
 
 TokenCounter = Callable[[str], int]
 
@@ -77,7 +94,7 @@ class JevClient(Protocol):
 
 
 class PartialCostError(Exception):
-    """Some Jev requests failed; carries the tokens the successful ones billed."""
+    """Some Jev work failed; carries every input token that was still billed."""
 
     def __init__(self, jev_input_tokens: int, errors: Sequence[BaseException]):
         super().__init__(
@@ -90,6 +107,36 @@ class PartialCostError(Exception):
 
 def state_json(state: Mapping[str, Any]) -> str:
     return json.dumps(state, ensure_ascii=False, sort_keys=True)
+
+
+def _noul_wire(q: NoulQuestion) -> dict[str, Any]:
+    return {
+        "type": "noul",
+        "instructions": q.instructions,
+        "criteria": {"true": q.yes, "false": q.no},
+    }
+
+
+def byte_bound_tokens(
+    state: Mapping[str, Any], questions: Mapping[str, NoulQuestion]
+) -> int:
+    """Provable upper bound on one request's billed input tokens.
+
+    UTF-8 bytes of the request body (serialized with spaced separators and
+    criteria always present, so never smaller than the SDK's compact body),
+    plus framing per request and per question.
+    """
+    body = {
+        "state": state,
+        "model": "m" * 64,
+        "questions": {name: _noul_wire(q) for name, q in questions.items()},
+    }
+    body_bytes = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+    return (
+        body_bytes
+        + REQUEST_OVERHEAD_TOKENS
+        + len(questions) * (QUESTION_OVERHEAD_TOKENS + INDEX_SLACK_TOKENS)
+    )
 
 
 def request_tokens(
@@ -161,8 +208,9 @@ async def run_nouls(
 ) -> list[NoulBatchResult]:
     """Run every request to completion under ``limit``.
 
-    If any fail, the rest still finish, and ``PartialCostError`` reports the
-    tokens the successful ones billed so the caller can still count them.
+    If any fail, the rest still finish, and ``PartialCostError`` reports every
+    billed token: the successful ones plus any a failed request still billed
+    (a nested ``PartialCostError``, e.g. a malformed but billed response).
     """
 
     async def one(
@@ -177,11 +225,17 @@ async def run_nouls(
         if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
             raise outcome
     results = [o for o in outcomes if isinstance(o, NoulBatchResult)]
-    errors = [o for o in outcomes if isinstance(o, Exception)]
-    if errors:
-        raise PartialCostError(
-            sum(r.input_tokens for r in results), errors
-        ) from errors[0]
+    failures = [o for o in outcomes if isinstance(o, Exception)]
+    if failures:
+        billed = sum(r.input_tokens for r in results)
+        errors: list[BaseException] = []
+        for failure in failures:
+            if isinstance(failure, PartialCostError):
+                billed += failure.jev_input_tokens
+                errors.extend(failure.errors)
+            else:
+                errors.append(failure)
+        raise PartialCostError(billed, errors) from failures[0]
     return results
 
 
@@ -206,14 +260,18 @@ class TypeSafeJevClient:
                 criteria = {"true": q.yes, "false": q.no}
             sdk_questions[name] = Noul(instructions=q.instructions, criteria=criteria)
         response = await self._client.system_one(dict(state), sdk_questions)
-        missing = questions.keys() - response.nouls.keys()
-        if missing:
-            raise RuntimeError(f"Jev response is missing {len(missing)} answers")
+        # Read usage first: a malformed response was still billed.
         input_tokens = response.usage.input_tokens
         if input_tokens is None:
-            # Usage is optional in the API contract; fall back to our bound so
-            # the spend counter never under-reports to zero.
-            input_tokens = request_tokens(state, questions)[0]
+            # Usage is optional in the API contract; fall back to the provable
+            # bound so the spend counter never under-reports.
+            input_tokens = byte_bound_tokens(state, questions)
+        missing = questions.keys() - response.nouls.keys()
+        if missing:
+            raise PartialCostError(
+                input_tokens,
+                [RuntimeError(f"Jev response is missing {len(missing)} answers")],
+            )
         return NoulBatchResult(
             probabilities={name: response.nouls[name].noul for name in questions},
             input_tokens=input_tokens,

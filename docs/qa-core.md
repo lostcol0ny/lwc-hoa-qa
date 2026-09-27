@@ -17,11 +17,11 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 |---|---|---|---|
 | 1. Validate | `ask.clean_question` | Drop control (`Cc`) and format (`Cf`, e.g. zero-width, bidi) characters, collapse whitespace, then require 1–500 characters. No model calls. | `invalid_input` |
 | 2. Gate | `retrieval/gate.py` | One Jev `Noul`: "Is `message` a question about the Lakewood Creek HOA, its rules, governance, fees, amenities, or neighborhood?" The question is sent as state (data), never inside the instructions. | `refused_off_topic`, with a link to the documents; the answer model is never called |
-| 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does this passage help answer the question?"), batched **one request per `doc_id`**. Documents over Jev's limits are split across requests, and a single chunk over the limits is split into sub-passages (its score is the best of its parts). Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` ("couldn't find it; contact the Board") with no free-form answer |
+| 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does this passage help answer the question?"), batched **one request per `doc_id`**. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` ("couldn't find it; contact the Board") with no free-form answer |
 | 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, quote}`. The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. | `not_found` if the model returns no claims |
 | 5a. Quote check | `verify/quotes.py` | Per citation: the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, and curly quotes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
 | 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
-| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims. Then apply the drop rule below. | `not_found` |
+| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. Then apply the drop rule below. | `not_found` |
 | 6. Respond | `ask.py` | Compose the `Answer` from verified claims only (see below): `Citation.url = citation_url(chunk)`, the §5 disclaimer, and a uuid4 `request_id`. | `answered` |
 
 ### How the answer text is built, and the claim-drop rule
@@ -48,7 +48,12 @@ exception *type*, because SDK error messages can echo request bodies. When Jev
 batches fail, every sibling batch still runs to completion. `PartialCostError`
 carries the tokens the successful batches billed, and `ask()` adds them to
 `AskResult.estimated_cost_usd` even on the `error` outcome, so the web budget
-sees that spend.
+sees that spend. A billed response that is malformed counts too:
+- A Jev response missing a judgment is read for usage first, then raises
+  `PartialCostError` with that usage. `run_nouls` adds such nested partial
+  costs to the successful siblings' costs.
+- An Anthropic response whose structured output fails validation returns its
+  usage with `draft=None`, which is counted before the retry.
 
 ## Configuration
 
@@ -65,47 +70,41 @@ sees that spend.
 | `SWEEP_TOP_K` | `8` | Maximum passages sent to the answer model |
 | `JEV_CONCURRENCY` | `4` | Maximum concurrent Jev requests per `ask()` (sweep and support share one semaphore). `SWEEP_CONCURRENCY` is still read as a fallback. |
 | `SUPPORT_THRESHOLD` | `0.5` | Minimum support probability for a claim |
+| `ANSWER_MAX_TOKENS` | `2048` | Answer-model output cap per call (256–16000). It is part of `max_cost_usd`. Raise it for models with adaptive thinking, since thinking counts against it. |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Link used in refusal / not-found messages |
 
 Keys are held as `SecretStr`, so they never appear in `repr()` or logs.
 
-## Jev request sizing (guaranteed limits)
+## Jev request sizing: a packing heuristic that fails closed
 
 Jev 1.13 allows 64K tokens per request (state plus all questions), and 32K for
 the state plus the longest question. The SDK has no tokenizer or
 token-counting endpoint (it only calls `/v1/systemone` and `/v1/models`), so
-`retrieval/jev.py` uses a deliberately conservative bound:
+packing uses a **heuristic**, `conservative_tokens(text)` = ceil(ASCII bytes /
+2.5) + 1 per non-ASCII UTF-8 byte. It adds fixed overheads of 256 tokens per
+request and 32 per question.
 
-- `conservative_tokens(text)` = ceil(ASCII bytes / 2.5) + 1 per non-ASCII
-  UTF-8 byte. English averages about 4–4.5 characters per token, so the ASCII
-  term has roughly 1.6–1.8× headroom. The non-ASCII term is the byte-fallback
-  worst case.
-- Fixed overheads: `REQUEST_OVERHEAD_TOKENS` = 256 per request (the JSON
-  envelope and model field), and `QUESTION_OVERHEAD_TOKENS` = 32 per question
-  (name, type, criteria keys).
-- `request_tokens` returns (whole request, state + longest question) under that
-  bound. `pack` only emits groups within both limits and returns anything too
-  large on its own separately. **No request known to exceed a limit is ever
-  sent.**
-  - In the sweep, an oversized chunk is split at whitespace into sub-passages
-    that each fit. If even minimal pieces cannot fit, the chunk is skipped with
-    a warning that logs only its `chunk_id`.
-  - In the support check, an oversized claim fails closed (the warning logs
-    only its index).
+- `pack` only emits groups that are within both limits under the heuristic.
+- Chunks are planned against the longest possible question (500 characters of
+  4-byte characters), so the plan doesn't depend on the question. A chunk too
+  big to send alone is split at whitespace into sub-passages. One that can't
+  be split small enough is skipped, logging only its `chunk_id`.
+- In the support check, a claim too big for any request fails closed, logging
+  only its index.
 
-Residual risk: ASCII text that tokenizes worse than 2.5 bytes/token (long runs
-of symbols or digits) could still exceed the estimate. The API would reject
-that request, and the result would be an `error` outcome with its partial cost
-counted.
+The heuristic is **not** a proof. Symbol- or digit-heavy ASCII can tokenize
+worse than 2.5 bytes per token, which could push a request over a real limit.
+If that happens the API rejects the request, and the result is the `error`
+outcome with every billed token counted. That fails closed and never
+overspends. Money never relies on this heuristic.
 
 ## Cost model
 
 `AskResult.estimated_cost_usd` = Jev input tokens × Jev rate + answer input
 tokens × input rate + answer output tokens × output rate. The token counts come
-from each SDK's usage fields (Jev's `usage.input_tokens`, falling back to our
-bound if the API omits it). All rates live in `answer/pricing.py`, with their
-sources and dates. An unlisted `ANSWER_MODEL` is costed at the most expensive
-tier, so the budget errs toward stopping early.
+from each SDK's usage fields. If Jev omits usage, the provable byte bound below
+is used instead. All rates live in `answer/pricing.py`, with their sources and
+dates. An unlisted `ANSWER_MODEL` is costed at the most expensive tier.
 
 | Component | Rate (2026-09-27) | Typical tokens | Typical cost |
 |---|---|---|---|
@@ -118,43 +117,82 @@ tier, so the budget errs toward stopping early.
 These are estimates. Integration (unit 5) replaces them with measured numbers.
 A gate refusal costs only the gate. Invalid input costs nothing.
 
-### Worst-case bound: `max_cost_usd`
+### Worst-case bound: `max_cost_usd` (provable)
 
-Computed once per asker by `ask.max_cost_usd(corpus, settings, answer_model)`.
-Every text is sized with `conservative_tokens` and the worst inputs the
-pipeline allows:
+The web unit reserves this amount before each call, so it must be a real upper
+bound and not an estimate. It is computed once per asker by
+`ask.max_cost_usd(passages, settings, answer_model, answer_max_tokens)`.
+
+**Assumption: at most one token per UTF-8 byte, plus bounded framing.** Both
+providers' tokenizers make every token cover at least one byte:
+- Claude uses byte-level BPE.
+- Jev's tokenizer is not published, but byte-level BPE and SentencePiece
+  with byte fallback both have this property. A tokenizer that could emit a
+  token covering zero bytes would break the bound.
+
+So a text of B bytes costs at most B tokens. Unlike the packing heuristic,
+this holds for adversarial digits, symbols, and non-ASCII text alike. On top of
+the bytes, the bound adds framing:
+
+| Provider | Framing counted on top of the bytes |
+|---|---|
+| Jev (`byte_bound_tokens`) | The request body is serialized with spaced separators and a 64-byte model name, which is never smaller than the SDK's compact `pydantic_core.to_json` body. Then +256 tokens per request (prompt template, special tokens), +32 per question, and +16 per question of slack for index digits (`p12345` vs `p0`) when passages are packed together. |
+| Anthropic | The prompt's system and user text, + the bytes of the JSON output schema, + `ANSWER_REQUEST_OVERHEAD_TOKENS` (2048) for role markers, special tokens, and structured-output instructions. |
+
+Inputs are always sized at the maximum the pipeline accepts:
+- `Q` is 500 characters × 4 bytes (the longest valid question, at the
+  largest possible UTF-8 width).
+- `S` is 400 characters × 4 bytes (the longest claim statement the draft
+  validation allows).
 
 ```
-Q  = a 500-character question of 4-byte characters
-S  = a 400-character claim statement of 4-byte characters
-
 jev_tokens =
-    gate(Q)
-  + Σ over plan_batches(Q, corpus) of request_tokens(batch)    # full sweep
-  + 2 × MAX_CLAIMS × request_tokens(one claim S citing the 3 largest chunks)
-                                                               # support, both attempts
-answer_in  = tokens(system + user prompt with Q, the SWEEP_TOP_K largest chunks,
-             and the retry list of MAX_CLAIMS failed statements S)
-           + ANSWER_REQUEST_OVERHEAD_TOKENS (2048)
+    byte_bound(gate request with Q)
+  + Σ over EVERY planned passage p of byte_bound(a request holding only p, with Q)
+  + 2 × MAX_CLAIMS × byte_bound(one support request: claim S citing the 3 chunks
+                                with the largest serialized support-passage size)
+answer_in  = bytes(system + user prompt with Q, the SWEEP_TOP_K chunks with the
+             largest rendered passages, and the retry block of MAX_CLAIMS × S)
+           + bytes(output schema) + 2048
 max_cost_usd = jev_tokens × Jev rate
-             + 2 × (answer_in × input rate + MAX_OUTPUT_TOKENS (4096) × output rate)
+             + 2 × (answer_in × input rate + ANSWER_MAX_TOKENS × output rate)
 ```
 
-A support request per claim is an upper bound, since packing claims together
-only removes overhead. The retry prompt is the larger of the two answer prompts,
-so it's used for both attempts. The bound comes from the same token estimate as
-request sizing, so it carries the same residual risk.
+Why each term is an upper bound:
+- **Sweep.** The plan is question-independent, so the passages the bound
+  counts are exactly the ones any question sends. Skipped chunks are never
+  sent by any question. Packing passages together only removes repeated
+  question, document and framing bytes, so one request per passage costs the
+  most.
+- **Support.** Each claim can cite at most 3 distinct chunks, all from the
+  corpus. Claims are chosen by their actual support-request serialization, and
+  one request per claim costs the most.
+- **Answer.** The retry prompt is the larger of the two prompts, and it is
+  used for both attempts. Output is capped by `max_tokens`.
 
-For `tests/fixtures/mini_corpus.json` with default settings (`claude-haiku-4-5`):
+`tests/qa/test_max_cost.py` checks the bound against fakes that bill one token
+per byte of the exact SDK wire body and of the prompt, plus the full
+`max_tokens` output. The fakes don't use either estimator. The tests run over
+the mini corpus, a ~74K-token synthetic digit/symbol-heavy corpus, and chunks
+at the split and skip boundaries. Each is run with a short question and a
+maximum-length question, at output caps of 1024, 2048 and 4096.
 
-| Term | Tokens | USD |
-|---|---|---|
-| Jev: gate 2,480 + sweep 17,277 (7 requests) + support 2 × 17,224 | 54,205 | $0.00228 |
-| Answer: 2 × (19,034 in + 4,096 out) | | $0.07903 |
-| **`max_cost_usd`** | | **$0.08130** |
+`max_cost_usd` (`claude-haiku-4-5`) by `ANSWER_MAX_TOKENS`:
 
-The two full-length outputs dominate the bound. On the real corpus the sweep
-term grows with the corpus: roughly its UTF-8 size ÷ 2.5, plus per-question overhead.
+| Corpus | 4096 | **2048 (default)** | 1024 |
+|---|---|---|---|
+| `tests/fixtures/mini_corpus.json` (8 chunks) | $0.09061 | **$0.07013** | $0.05989 |
+| Synthetic ~74K-token corpus (240 chunks) | $0.12380 | **$0.10332** | $0.09308 |
+
+At 2048, the bound breaks down like this:
+
+| Corpus | Jev | Answer input | Answer output |
+|---|---|---|---|
+| Mini | $0.00294 (69,976 tokens) | $0.04671 (2 × 23,354 tokens) | $0.02048 |
+| Synthetic ~74K | $0.03338 (794,846 tokens) | $0.04946 (2 × 24,729 tokens) | $0.02048 |
+
+The largest term is the worst-case answer prompt, where the question and eight
+rejected statements are counted at 4 bytes per character. It is not the output.
 
 ## Logging and privacy
 

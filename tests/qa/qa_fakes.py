@@ -11,6 +11,7 @@ from typing import Any
 
 from hoa_qa.answer.prompt import AnswerPrompt
 from hoa_qa.answer.provider import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     AnswerDraft,
     DraftCitation,
     DraftClaim,
@@ -21,6 +22,7 @@ from hoa_qa.models import Corpus
 from hoa_qa.retrieval.jev import (
     NoulBatchResult,
     NoulQuestion,
+    PartialCostError,
     conservative_tokens,
     fits,
     request_tokens,
@@ -36,13 +38,16 @@ class FakeJev:
     """Routes by question name: ``on_topic`` (gate), ``p*`` (sweep), ``c*``.
 
     ``support`` is a constant or ``f(statement, cited_chunk_ids)``. ``fail``
-    decides, per request, whether to raise instead of answering.
+    decides, per request, whether to raise instead of answering (unbilled);
+    ``malformed`` bills the request and then raises ``PartialCostError``, like
+    a billed response that is missing a judgment.
     """
 
     gate: float = 0.95
     relevance: Mapping[str, float] = field(default_factory=dict)
     support: float | SupportFn = 0.9
     fail: Callable[[Mapping[str, Any]], bool] = lambda state: False
+    malformed: Callable[[Mapping[str, Any]], bool] = lambda state: False
     calls: list[tuple[dict[str, Any], dict[str, NoulQuestion]]] = field(
         default_factory=list
     )
@@ -71,9 +76,16 @@ class FakeJev:
                 probabilities[name] = (
                     support(claim["statement"], ids) if callable(support) else support
                 )
-        tokens = request_tokens(state, questions)[0]
+        tokens = self.bill(state, questions)
         self.billed.append(tokens)
+        if self.malformed(state):
+            raise PartialCostError(tokens, [RuntimeError("missing judgment")])
         return NoulBatchResult(probabilities, tokens)
+
+    def bill(
+        self, state: Mapping[str, Any], questions: Mapping[str, NoulQuestion]
+    ) -> int:
+        return request_tokens(state, questions)[0]
 
     def calls_of(self, kind: str) -> list[dict[str, NoulQuestion]]:
         return [
@@ -88,6 +100,7 @@ class FakeJev:
 class FakeProvider:
     drafts: list[AnswerDraft | None]
     model: str = "claude-haiku-4-5"
+    max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     prompts: list[AnswerPrompt] = field(default_factory=list)
     input_tokens: list[int] = field(default_factory=list)
     output_tokens: list[int] = field(default_factory=list)
@@ -95,11 +108,16 @@ class FakeProvider:
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
         self.prompts.append(prompt)
         draft = self.drafts[min(len(self.prompts), len(self.drafts)) - 1]
-        tokens_in = conservative_tokens(prompt.system + prompt.user)
-        tokens_out = conservative_tokens(draft.model_dump_json() if draft else "{")
+        tokens_in, tokens_out = self.bill(prompt, draft)
         self.input_tokens.append(tokens_in)
         self.output_tokens.append(tokens_out)
         return ProviderResult(draft, self.model, tokens_in, tokens_out)
+
+    def bill(self, prompt: AnswerPrompt, draft: AnswerDraft | None) -> tuple[int, int]:
+        return (
+            conservative_tokens(prompt.system + prompt.user),
+            conservative_tokens(draft.model_dump_json() if draft else "{"),
+        )
 
 
 def claim(

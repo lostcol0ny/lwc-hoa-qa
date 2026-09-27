@@ -16,7 +16,12 @@ from hoa_qa.answer.prompt import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_ANSWER_MODEL = "claude-haiku-4-5"
-MAX_OUTPUT_TOKENS = 4096
+# Default answer-model output cap (ANSWER_MAX_TOKENS), part of the budget
+# bound. A realistic 8-claim answer is ~1K tokens and the schema caps allow
+# ~2K, so 2048 avoids truncating valid answers (truncated JSON -> not_found)
+# while halving the output term of max_cost_usd versus 4096. Raise it for
+# models with adaptive thinking, whose reasoning counts against the cap.
+DEFAULT_MAX_OUTPUT_TOKENS = 2048
 
 
 class DraftCitation(BaseModel):
@@ -102,6 +107,11 @@ class AnswerProvider(Protocol):
     @property
     def model(self) -> str: ...
 
+    @property
+    def max_tokens(self) -> int:
+        """Output-token cap per call; bounds billed output for max_cost_usd."""
+        ...
+
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult: ...
 
 
@@ -115,20 +125,31 @@ def parse_draft(text: str) -> AnswerDraft | None:
 class AnthropicAnswerProvider:
     """``AnswerProvider`` using the Messages API with JSON-schema output."""
 
-    def __init__(self, *, api_key: str, model: str = DEFAULT_ANSWER_MODEL) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = DEFAULT_ANSWER_MODEL,
+        max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+    ) -> None:
         from anthropic import AsyncAnthropic
 
         self._model = model
+        self._max_tokens = max_tokens
         self._client = AsyncAnthropic(api_key=api_key)
 
     @property
     def model(self) -> str:
         return self._model
 
+    @property
+    def max_tokens(self) -> int:
+        return self._max_tokens
+
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
         response = await self._client.messages.create(
             model=self._model,
-            max_tokens=MAX_OUTPUT_TOKENS,
+            max_tokens=self._max_tokens,
             system=prompt.system,
             messages=[{"role": "user", "content": prompt.user}],
             output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},

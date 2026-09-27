@@ -18,7 +18,14 @@ from hoa_qa.retrieval.jev import (
     pack,
     request_tokens,
 )
-from hoa_qa.retrieval.sweep import SweepPassage, batch_request, plan_batches, sweep
+from hoa_qa.retrieval.sweep import (
+    SweepPassage,
+    SweepPlan,
+    batch_request,
+    plan_batches,
+    plan_passages,
+    sweep,
+)
 
 Q = "What are the fines?"
 
@@ -27,8 +34,9 @@ def run_sweep(jev: FakeJev, chunks: Sequence[Chunk], concurrency: int = 2, **kw)
     options = {"top_k": 8, "threshold": 0.3} | kw
 
     async def go():
+        passages = plan_passages(chunks).passages
         return await sweep(
-            jev, Q, chunks, limit=asyncio.Semaphore(concurrency), **options
+            jev, Q, passages, limit=asyncio.Semaphore(concurrency), **options
         )
 
     return asyncio.run(go())
@@ -58,6 +66,18 @@ def make_chunk(i: int, doc: str, text: str) -> Chunk:
 
 def words(i: int, doc: str, n: int) -> Chunk:
     return make_chunk(i, doc, " ".join(["word"] * n) + f" #{i}")
+
+
+def make_plan(chunks, counter=None, limits=None, worst: str = Q) -> SweepPlan:
+    """Plan passages (sized for ``worst``) and pack them for question Q."""
+    kwargs = {}
+    if counter is not None:
+        kwargs["count_tokens"] = counter
+    if limits is not None:
+        kwargs["limits"] = limits
+    planned = plan_passages(chunks, worst_question=worst, **kwargs)
+    packed = plan_batches(Q, planned.passages, **kwargs)
+    return SweepPlan(packed.batches, [*planned.skipped, *packed.skipped])
 
 
 def word_tokens(text: str) -> int:
@@ -125,7 +145,7 @@ def test_total_limit_binds_independently() -> None:
     """Many tiny passages: questions dominate, so only the 64K-style total binds."""
     chunks = [words(i, "d", 1) for i in range(40)]
     limits = JevLimits(max_request_tokens=800, max_state_tokens=100_000)
-    plan = plan_batches(Q, chunks, word_tokens, limits)
+    plan = make_plan(chunks, word_tokens, limits)
     assert len(plan.batches) > 1 and not plan.skipped
     for batch in plan.batches:
         total, state_plus = sizes(batch)
@@ -140,7 +160,7 @@ def test_state_limit_binds_independently() -> None:
     chunks = [words(i, "d", 100) for i in range(4)]
     one = sizes([SweepPassage(chunks[0], chunks[0].text_clean)])[1]
     limits = JevLimits(max_request_tokens=100_000, max_state_tokens=one + 20)
-    plan = plan_batches(Q, chunks, word_tokens, limits)
+    plan = make_plan(chunks, word_tokens, limits)
     assert [len(b) for b in plan.batches] == [1, 1, 1, 1]
     for batch in plan.batches:
         total, state_plus = sizes(batch)
@@ -153,7 +173,7 @@ def test_state_limit_binds_independently() -> None:
 def test_large_document_is_split_under_both_limits() -> None:
     chunks = [words(i, "big", 100) for i in range(10)] + [words(0, "small", 5)]
     limits = JevLimits(max_request_tokens=700, max_state_tokens=500)
-    plan = plan_batches(Q, chunks, word_tokens, limits)
+    plan = make_plan(chunks, word_tokens, limits)
     assert [p.chunk.doc_id for p in plan.batches[-1]] == ["small"]
     big = [b for b in plan.batches if b[0].chunk.doc_id == "big"]
     assert len(big) > 1
@@ -166,7 +186,7 @@ def test_oversized_singleton_is_split_into_parts(corpus: Corpus) -> None:
     huge = words(1, "d", 1_000)
     chunks = [words(0, "d", 5), huge, words(2, "d", 5)]
     limits = JevLimits(max_request_tokens=600, max_state_tokens=500)
-    plan = plan_batches(Q, chunks, word_tokens, limits)
+    plan = make_plan(chunks, word_tokens, limits)
     assert not plan.skipped
     parts = [p for b in plan.batches for p in b if p.chunk.id == "d-1"]
     assert len(parts) > 1
@@ -184,7 +204,7 @@ def test_unsplittable_singleton_is_skipped_not_sent(
     # still exceed a limit this tight, so the chunk is skipped.
     chunk = make_chunk(0, "d", "x" * 400)
     limits = JevLimits(max_request_tokens=300, max_state_tokens=290)
-    plan = plan_batches(Q, [chunk], lambda t: len(t), limits)
+    plan = make_plan([chunk], lambda t: len(t), limits)
     assert plan.batches == [] and plan.skipped == ["d-0"]
     assert "chunk_id=d-0" in caplog.text
     assert "x" * 50 not in caplog.text
@@ -221,7 +241,7 @@ def test_oversized_real_chunk_is_split_and_scored_by_best_part(
 
 
 def test_real_corpus_fits_default_limits(corpus: Corpus) -> None:
-    plan = plan_batches(Q, corpus.chunks)
+    plan = make_plan(corpus.chunks)
     assert not plan.skipped
     for batch in plan.batches:
         assert fits(*batch_request(Q, batch))
