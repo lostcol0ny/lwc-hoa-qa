@@ -254,10 +254,11 @@ variable (the two API keys, `UPSTASH_REDIS_REST_TOKEN` or its fallback
 
 **Refresh the corpus.** **Build corpus** runs monthly (06:17 UTC on the 1st),
 on pushes to `main` that touch `sources.yaml` or the ingest code, and by hand.
-Deploy doesn't run when a new corpus is built. It bundles the latest successful
-`corpus` artifact from `main` each time it runs, so trigger a deploy afterwards
-(push, or re-run the latest Deploy run as above) and check `chunk_count` and
-`corpus_build_time` on `/api/health`. The artifact is kept for 90 days, and
+A merge that changes the corpus starts a build, then a successful build on
+`main` automatically redeploys production with that run's artifact and current
+`main` code. Monthly and manual builds on `main` now reach production too;
+no manual Deploy re-run is needed. Check `chunk_count` and `corpus_build_time`
+on `/api/health`. The artifact is kept for 90 days, and
 the monthly run keeps a fresh one around. If Deploy says the artifact expired,
 run **Build corpus** first. When chunk ids change, refresh
 `evals/corpus_ids.txt` (`hoa-qa eval --write-ids --corpus build/corpus.json`).

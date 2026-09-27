@@ -334,10 +334,21 @@ One-time setup:
 ## Deploy workflow (`.github/workflows/deploy.yml`)
 
 - **Pull request:** preview deployment. **Push to `main`:** production.
+- A successful **Build corpus** run on `main` automatically redeploys production:
+  merge → build → redeploy, including monthly and manual rebuilds. No manual
+  Deploy re-run is needed. Failed/cancelled builds leave the deploy job visibly
+  skipped. The `workflow_run` branch filter excludes manual builds on other
+  branches (see [GitHub's branch-filter documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#limiting-your-workflow-to-run-based-on-branches)).
+- Production deploys share one concurrency group with cancellation disabled.
+  PR previews retain their per-ref group and cancel superseded previews.
+  Production checks out current `main`, never the triggering build's SHA or
+  branch, so a queued build cannot roll production code back.
 - With no Vercel secrets (including fork PRs, which never get secrets), the job
   writes a "Deploy skipped" summary and succeeds.
 - It downloads the `corpus` artifact (`corpus.json` + `corpus_manifest.json`)
-  from the **latest successful `build-corpus.yml` run on `main`** and fails with a
+  from the **exact triggering run** for `workflow_run`; an older run is skipped
+  if a newer successful build on `main` exists. Push and PR deploys use the
+  **latest successful `build-corpus.yml` run on `main`**. Selection fails with a
   clear message if there's no such run, the artifact expired, or a file is
   missing. It then validates the corpus with `load_corpus`.
 - Then `vercel pull` → `vercel build` → `vercel deploy --prebuilt` with the
