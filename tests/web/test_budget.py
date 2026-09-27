@@ -17,6 +17,7 @@ from hoa_qa.budget import (
     UpstashCounterStore,
     UpstashError,
     month_key,
+    resolve_redis_config,
     select_budget_store,
     select_counter_store,
     upstash_config,
@@ -357,3 +358,188 @@ def test_read_only_token_never_configures_store(url_key: str) -> None:
     assert upstash_config(env) is None
     assert isinstance(select_counter_store(env), InMemoryCounterStore)
     assert isinstance(select_budget_store(env), FailClosedBudgetStore)
+
+
+REDIS_PAIRING_CASES = [
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://upstash.example",
+            "UPSTASH_REDIS_REST_TOKEN": "u-tok",
+        },
+        ("https://upstash.example", "u-tok"),
+        (),
+        False,
+        "upstash",
+        id="upstash_pair_only",
+    ),
+    pytest.param(
+        {
+            "KV_REST_API_URL": "https://kv.example",
+            "KV_REST_API_TOKEN": "k-tok",
+        },
+        ("https://kv.example", "k-tok"),
+        (),
+        False,
+        "kv",
+        id="kv_pair_only",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://upstash.example",
+            "UPSTASH_REDIS_REST_TOKEN": "u-tok",
+            "KV_REST_API_URL": "https://kv.example",
+            "KV_REST_API_TOKEN": "k-tok",
+        },
+        ("https://upstash.example", "u-tok"),
+        (),
+        False,
+        "upstash",
+        id="both_complete_upstash_wins",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://upstash.example",
+            "KV_REST_API_TOKEN": "k-tok",
+        },
+        None,
+        ("KV_REST_API_URL", "UPSTASH_REDIS_REST_TOKEN"),
+        True,
+        None,
+        id="upstash_url_and_kv_token_mixed_error",
+    ),
+    pytest.param(
+        {"KV_REST_API_URL": "https://kv.example"},
+        None,
+        ("KV_REST_API_TOKEN",),
+        True,
+        None,
+        id="kv_url_only_error",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_TOKEN": "u-tok",
+            "KV_REST_API_URL": "https://kv.example",
+            "KV_REST_API_TOKEN": "k-tok",
+        },
+        None,
+        ("UPSTASH_REDIS_REST_URL",),
+        True,
+        None,
+        id="upstash_token_only_with_complete_kv_pair_error",
+    ),
+    pytest.param(
+        {"KV_REST_API_READ_ONLY_TOKEN": "ro-tok"},
+        None,
+        (),
+        False,
+        None,
+        id="read_only_token_alone_ignored",
+    ),
+    pytest.param(
+        {
+            "KV_REST_API_URL": "https://kv.example",
+            "KV_REST_API_READ_ONLY_TOKEN": "ro-tok",
+        },
+        None,
+        ("KV_REST_API_TOKEN",),
+        True,
+        None,
+        id="kv_url_with_read_only_token_error",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://upstash.example",
+            "UPSTASH_REDIS_REST_TOKEN": "u-tok",
+            "KV_REST_API_READ_ONLY_TOKEN": "ro-tok",
+        },
+        ("https://upstash.example", "u-tok"),
+        (),
+        False,
+        "upstash",
+        id="upstash_complete_with_read_only_token_ignored",
+    ),
+    pytest.param(
+        {
+            "KV_REST_API_URL": "https://kv.example",
+            "KV_REST_API_TOKEN": "k-tok",
+            "KV_REST_API_READ_ONLY_TOKEN": "ro-tok",
+        },
+        ("https://kv.example", "k-tok"),
+        (),
+        False,
+        "kv",
+        id="kv_complete_with_read_only_token_ignored",
+    ),
+    pytest.param(
+        {},
+        None,
+        (),
+        False,
+        None,
+        id="neither_pair_configured",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    (
+        "env",
+        "expected_creds",
+        "expected_missing",
+        "expected_incomplete",
+        "expected_family",
+    ),
+    REDIS_PAIRING_CASES,
+)
+def test_redis_credential_pairing_resolution(
+    env: dict[str, str],
+    expected_creds: tuple[str, str] | None,
+    expected_missing: tuple[str, ...],
+    expected_incomplete: bool,
+    expected_family: str | None,
+) -> None:
+    result = resolve_redis_config(env)
+    assert result.credentials == expected_creds
+    assert result.missing_variables == expected_missing
+    assert result.incomplete is expected_incomplete
+    assert result.family == expected_family
+    assert upstash_config(env) == expected_creds
+
+
+@pytest.mark.parametrize(
+    (
+        "env",
+        "expected_creds",
+        "expected_missing",
+        "expected_incomplete",
+        "expected_family",
+    ),
+    REDIS_PAIRING_CASES,
+)
+def test_redis_store_selection_production_vs_development(
+    env: dict[str, str],
+    expected_creds: tuple[str, str] | None,
+    expected_missing: tuple[str, ...],
+    expected_incomplete: bool,
+    expected_family: str | None,
+) -> None:
+    # Development behavior: in-memory store is allowed even on incomplete configs
+    dev_counters = select_counter_store(env)
+    dev_budget = select_budget_store(env, dev_counters, production=False)
+    if expected_creds is not None:
+        assert isinstance(dev_counters, UpstashCounterStore)
+        asyncio.run(dev_counters.aclose())
+    else:
+        assert isinstance(dev_counters, InMemoryCounterStore)
+    assert isinstance(dev_budget, CounterBudgetStore)
+
+    # Production behavior: incomplete pair or unconfigured fails closed
+    prod_env = {**env, "VERCEL_ENV": "production"}
+    prod_counters = select_counter_store(prod_env)
+    prod_budget = select_budget_store(prod_env, prod_counters, production=True)
+    if expected_creds is not None and not expected_incomplete:
+        assert isinstance(prod_counters, UpstashCounterStore)
+        assert isinstance(prod_budget, CounterBudgetStore)
+        asyncio.run(prod_counters.aclose())
+    else:
+        assert isinstance(prod_budget, FailClosedBudgetStore)

@@ -226,3 +226,211 @@ def test_budget_warning_uses_the_askers_max_cost(
             == "budget_below_reservation"
         )
     assert caplog.text.count("below the per-request reservation") == 1
+
+
+APP_PAIRING_CASES = [
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://secret-upstash.example.com",
+            "UPSTASH_REDIS_REST_TOKEN": "secret-upstash-token-12345",
+        },
+        (),
+        False,
+        "ok",
+        id="upstash_pair_only",
+    ),
+    pytest.param(
+        {
+            "KV_REST_API_URL": "https://secret-kv.example.com",
+            "KV_REST_API_TOKEN": "secret-kv-token-67890",
+        },
+        (),
+        False,
+        "ok",
+        id="kv_pair_only",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://secret-upstash.example.com",
+            "UPSTASH_REDIS_REST_TOKEN": "secret-upstash-token-12345",
+            "KV_REST_API_URL": "https://secret-kv.example.com",
+            "KV_REST_API_TOKEN": "secret-kv-token-67890",
+        },
+        (),
+        False,
+        "ok",
+        id="both_complete_upstash_wins",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://secret-upstash.example.com",
+            "KV_REST_API_TOKEN": "secret-kv-token-67890",
+        },
+        ("KV_REST_API_URL", "UPSTASH_REDIS_REST_TOKEN"),
+        True,
+        "redis_config_incomplete: missing KV_REST_API_URL, UPSTASH_REDIS_REST_TOKEN",
+        id="upstash_url_and_kv_token_mixed_error",
+    ),
+    pytest.param(
+        {"KV_REST_API_URL": "https://secret-kv.example.com"},
+        ("KV_REST_API_TOKEN",),
+        True,
+        "redis_config_incomplete: missing KV_REST_API_TOKEN",
+        id="kv_url_only_error",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_TOKEN": "secret-upstash-token-12345",
+            "KV_REST_API_URL": "https://secret-kv.example.com",
+            "KV_REST_API_TOKEN": "secret-kv-token-67890",
+        },
+        ("UPSTASH_REDIS_REST_URL",),
+        True,
+        "redis_config_incomplete: missing UPSTASH_REDIS_REST_URL",
+        id="upstash_token_only_with_complete_kv_pair_error",
+    ),
+    pytest.param(
+        {"KV_REST_API_READ_ONLY_TOKEN": "secret-ro-token-11111"},
+        (),
+        False,
+        "redis_not_configured",
+        id="read_only_token_alone_ignored",
+    ),
+    pytest.param(
+        {
+            "KV_REST_API_URL": "https://secret-kv.example.com",
+            "KV_REST_API_READ_ONLY_TOKEN": "secret-ro-token-11111",
+        },
+        ("KV_REST_API_TOKEN",),
+        True,
+        "redis_config_incomplete: missing KV_REST_API_TOKEN",
+        id="kv_url_with_read_only_token_error",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://secret-upstash.example.com",
+            "UPSTASH_REDIS_REST_TOKEN": "secret-upstash-token-12345",
+            "KV_REST_API_READ_ONLY_TOKEN": "secret-ro-token-11111",
+        },
+        (),
+        False,
+        "ok",
+        id="upstash_complete_with_read_only_token_ignored",
+    ),
+    pytest.param(
+        {
+            "KV_REST_API_URL": "https://secret-kv.example.com",
+            "KV_REST_API_TOKEN": "secret-kv-token-67890",
+            "KV_REST_API_READ_ONLY_TOKEN": "secret-ro-token-11111",
+        },
+        (),
+        False,
+        "ok",
+        id="kv_complete_with_read_only_token_ignored",
+    ),
+    pytest.param(
+        {},
+        (),
+        False,
+        "redis_not_configured",
+        id="neither_pair_configured",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("redis_env", "missing_vars", "is_error", "expected_prod_health"),
+    APP_PAIRING_CASES,
+)
+def test_redis_pairing_startup_health_and_ask_behavior(
+    caplog: pytest.LogCaptureFixture,
+    redis_env: dict[str, str],
+    missing_vars: tuple[str, ...],
+    is_error: bool,
+    expected_prod_health: str,
+) -> None:
+    # 1. Production behavior
+    prod_env = {
+        "VERCEL_ENV": "production",
+        "MONTHLY_BUDGET_USD": "10",
+        "CORPUS_PATH": str(FIXTURE_CORPUS),
+        **redis_env,
+    }
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        prod_app = create_app(env=prod_env)
+        fake = RecordingAsker()
+        prod_app.dependency_overrides[get_asker] = lambda: fake
+        client = TestClient(prod_app)
+        health_resp = client.get("/api/health")
+
+    assert health_resp.status_code == 200
+    health_body = health_resp.json()
+    assert health_body["budget_config"] == expected_prod_health
+
+    # Health reason text and logs must name missing variables when incomplete
+    for var in missing_vars:
+        assert var in health_body["budget_config"]
+        assert var in caplog.text
+
+    # MUST NEVER LEAK SECRETS OR URLS IN HEALTH OR LOGS
+    for key, val in redis_env.items():
+        assert val not in health_resp.text, f"Secret {key} leaked in /api/health"
+        assert val not in caplog.text, f"Secret {key} leaked in logs"
+
+    if is_error or expected_prod_health == "redis_not_configured":
+        ask_resp = client.post("/api/ask", json={"question": QUESTION})
+        assert ask_resp.json()["outcome"] == "budget_exhausted"
+        assert fake.questions == []
+        expected_msg = (
+            "Redis configuration incomplete"
+            if is_error
+            else "Redis is not configured in production"
+        )
+        assert any(
+            record.levelno == logging.ERROR and expected_msg in record.message
+            for record in caplog.records
+        )
+
+    # 2. Development behavior
+    dev_env = {
+        "MONTHLY_BUDGET_USD": "10",
+        "CORPUS_PATH": str(FIXTURE_CORPUS),
+        **redis_env,
+    }
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        dev_app = create_app(env=dev_env)
+        dev_fake = RecordingAsker()
+        dev_app.dependency_overrides[get_asker] = lambda: dev_fake
+        dev_client = TestClient(dev_app)
+        dev_health = dev_client.get("/api/health")
+
+    assert dev_health.status_code == 200
+    assert dev_health.json()["budget_config"] == "ok"
+
+    for key, val in redis_env.items():
+        assert val not in dev_health.text, f"Secret {key} leaked in dev health"
+        assert val not in caplog.text, f"Secret {key} leaked in dev logs"
+
+    if is_error:
+        # In dev, incomplete pair logs a warning but allows in-memory counter store
+        assert any(
+            record.levelno == logging.WARNING
+            and "Redis configuration incomplete" in record.message
+            for record in caplog.records
+        )
+        for var in missing_vars:
+            assert var in caplog.text
+        # Questions succeed in dev via in-memory store
+        dev_ask = dev_client.post("/api/ask", json={"question": QUESTION})
+        assert dev_ask.json()["outcome"] == "answered"
+    elif expected_prod_health == "redis_not_configured":
+        # Unconfigured in dev: normal in-memory dev mode, no warnings
+        assert not any(
+            "Redis" in record.message
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+        )
+        dev_ask = dev_client.post("/api/ask", json={"question": QUESTION})
+        assert dev_ask.json()["outcome"] == "answered"

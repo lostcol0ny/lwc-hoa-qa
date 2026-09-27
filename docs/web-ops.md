@@ -50,12 +50,18 @@ HOA_QA_FAKE_ASKER=1 CORPUS_PATH=tests/fixtures/mini_corpus.json \
 | `GET /api/health` | `{"status": "ok", "corpus_build_time", "chunk_count", "documents_url", "budget_config"}`, or 503 `{"status": "unavailable"}` if the corpus is missing or invalid |
 | `GET /documents` | 307 redirect to `HOA_DOCUMENTS_URL` (re-checked: https, no userinfo; else the default). The page's documents links point here so they work without JS |
 
-`budget_config` is `"ok"` or `"budget_below_reservation"`: the latter means
-`MONTHLY_BUDGET_USD < R`, so every question gets `budget_exhausted`. It reveals
-neither amount. Until the first question builds the asker, R is the env default
-`BUDGET_RESERVE_PER_REQUEST_USD`; afterwards it includes the asker's
-`max_cost_usd`. The same condition is logged as a WARNING at startup (env
-default R) and once more on the first question (real R).
+`budget_config` reports the spend cap and Redis configuration health:
+- In production, if Redis credentials are half-configured (an incomplete pair),
+  it reports `"redis_config_incomplete: missing <VAR>"` naming the missing
+  variable(s). If neither pair is configured, it reports `"redis_not_configured"`.
+  Health reports never leak secrets or URLs.
+- When Redis is operational (or in dev where in-memory stores are allowed),
+  it reports `"budget_below_reservation"` if `MONTHLY_BUDGET_USD < R` (meaning
+  every question will get `budget_exhausted`), or `"ok"`.
+It reveals neither budget nor token amounts. Until the first question builds
+the asker, R is the env default `BUDGET_RESERVE_PER_REQUEST_USD`; afterwards it
+includes the asker's `max_cost_usd`. The same condition is logged as a WARNING
+at startup (env default R) and once more on the first question (real R).
 
 Every `/api/ask` response body is `Answer`-shaped, so the page renders them all
 the same way:
@@ -75,8 +81,8 @@ the same way:
 |---|---|---|
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | Monthly spend cap |
 | `BUDGET_RESERVE_PER_REQUEST_USD` | `0.05` | Minimum per-request reservation R (see below). Must be positive; an invalid value stops the app from starting |
-| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Shared counters; each takes precedence over its `KV_*` fallback |
-| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | Marketplace fallback URL and writable token; `KV_REST_API_READ_ONLY_TOKEN` is never used |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Shared counters; resolved as a pair, taking precedence over the `KV_*` fallback pair |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | Marketplace fallback pair; `KV_REST_API_READ_ONLY_TOKEN` is never used |
 | `RATE_LIMIT_PER_HOUR`, `RATE_LIMIT_PER_DAY` | `10`, `50` | App-level per-IP limits |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Document link for budget-exhausted answers and the page; the same variable the QA core uses for refusals. Must be `https://` |
 | `CORPUS_PATH` | `corpus.json` | Corpus location |
@@ -179,7 +185,7 @@ Consequences:
 
 | Situation | Result |
 |---|---|
-| `VERCEL_ENV=production` and Upstash not configured | Every question gets `budget_exhausted`. Per-instance memory can't enforce a shared cap, so the app refuses instead of running uncapped |
+| `VERCEL_ENV=production` and Redis not configured or half-configured | Every question gets `budget_exhausted`. Per-instance memory can't enforce a shared cap, so the app refuses instead of running uncapped. Startup logs an error and `/api/health` reports the specific reason |
 | `VERCEL_ENV=production` and `MONTHLY_BUDGET_USD` missing/invalid | Budget is $0, so every question gets `budget_exhausted` |
 | Upstash errors while reserving (read or write) | That request gets `budget_exhausted`; the asker isn't called |
 | Upstash errors while reconciling | The answer is returned and the full reservation stays counted; the error type and request ID are logged |
@@ -318,11 +324,18 @@ One-time setup:
    upstash.com. The [Marketplace integration](https://vercel.com/marketplace/upstash/upstash-kv)
    injects `KV_REST_API_URL` and `KV_REST_API_TOKEN`, also documented in
    [Upstash's integration example](https://upstash.com/docs/redis/tutorials/nextjs_with_redis).
-   The app first reads `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`,
-   falling back individually to the corresponding `KV_*` variable when unset
-   or blank. No manual mapping is needed. Both budget and rate limiting use
-   this resolution. `KV_REST_API_READ_ONLY_TOKEN` is never used: counters need
-   writes. Without a URL and writable token, production still fails closed.
+   The app resolves credentials as **pairs**: it uses the UPSTASH pair
+   (`UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`) if both are set,
+   otherwise falling back to the KV pair (`KV_REST_API_URL` and `KV_REST_API_TOKEN`)
+   if both are set. URLs and tokens from different families are never mixed.
+   Any **incomplete** pair (exactly one of URL or token set in either family) is a
+   configuration error, even if the other family is complete. In production,
+   a configuration error or missing credentials fails closed (refusing all questions),
+   logs a clear startup error, and reports a specific reason in `/api/health`
+   (`"redis_config_incomplete: missing <VAR>"` or `"redis_not_configured"`) without
+   leaking secrets or URLs. In development, an incomplete pair logs a warning and
+   falls back to in-memory counters. `KV_REST_API_READ_ONLY_TOKEN` is never used:
+   counters need writes. Both budget and rate limiting use this resolution.
    Scope credentials to Production (and Preview for shared counters there).
 3. Project environment variables: `MONTHLY_BUDGET_USD`, `TYPESAFE_API_KEY`,
    `ANTHROPIC_API_KEY`, `ANSWER_MODEL`, and optionally `HOA_DOCUMENTS_URL` and

@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,6 +27,8 @@ from hoa_qa.budget import (
     BudgetStore,
     CounterStore,
     Reservation,
+    check_redis_config,
+    resolve_redis_config,
     select_budget_store,
     select_counter_store,
 )
@@ -121,8 +123,11 @@ def create_app(
     configure_logging()
     check_sdk_debug_logging(env)
     config = settings or WebSettings.from_env(env)
+    check_redis_config(env, log=logger, production=config.production)
     counter_store = counters or select_counter_store(env)
-    budget = budget_store or select_budget_store(env, counter_store)
+    budget = budget_store or select_budget_store(
+        env, counter_store, production=config.production
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -279,7 +284,9 @@ def create_app(
                 "documents_url": settings.documents_url,
                 # Uses the asker's max_cost_usd once a request has built it.
                 "budget_config": budget_config(
-                    settings, getattr(request.app.state, "asker", None)
+                    settings,
+                    getattr(request.app.state, "asker", None),
+                    env=getattr(request.app.state, "env", None),
                 ),
             }
         )
@@ -325,19 +332,38 @@ def reservation_amount(settings: WebSettings, asker: object) -> float:
     return max(reserve, declared)
 
 
-BudgetConfig = Literal["ok", "budget_below_reservation"]
+BudgetConfig = str
 
 
-def budget_config(settings: WebSettings, asker: object) -> BudgetConfig:
-    """``budget_below_reservation`` when ``MONTHLY_BUDGET_USD < R``: then no
-    question can ever be admitted. Not sensitive: it reveals neither amount."""
+def budget_config(
+    settings: WebSettings,
+    asker: object,
+    env: Mapping[str, str] | None = None,
+) -> BudgetConfig:
+    """Check budget and Redis configuration status for /api/health.
+
+    In production, a Redis configuration error (incomplete pair) or missing
+    Redis configuration reports a specific reason (such as
+    ``redis_config_incomplete: missing <VAR>`` or ``redis_not_configured``)
+    without leaking secrets or URLs.
+    When configured, reports ``budget_below_reservation`` if
+    MONTHLY_BUDGET_USD < R, or ``ok``.
+    """
+    if settings.production:
+        env_map = os.environ if env is None else env
+        redis = resolve_redis_config(env_map)
+        if redis.incomplete:
+            missing_str = ", ".join(redis.missing_variables)
+            return f"redis_config_incomplete: missing {missing_str}"
+        if redis.credentials is None:
+            return "redis_not_configured"
     if settings.monthly_budget_usd < reservation_amount(settings, asker):
         return "budget_below_reservation"
     return "ok"
 
 
 def warn_if_budget_below_reservation(settings: WebSettings, asker: object) -> None:
-    if budget_config(settings, asker) == "budget_below_reservation":
+    if settings.monthly_budget_usd < reservation_amount(settings, asker):
         logger.warning(
             "MONTHLY_BUDGET_USD=%.6f is below the per-request reservation "
             "R=%.6f; every question will get budget_exhausted",
