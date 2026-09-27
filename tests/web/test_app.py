@@ -10,6 +10,7 @@ from web_fakes import QUESTION, Harness, RecordingAsker, build_harness, make_set
 
 from hoa_qa.budget import FailClosedBudgetStore
 from hoa_qa.models import Answer, Outcome
+from hoa_qa.web import deps as web_deps
 from hoa_qa.web.app import create_app
 from hoa_qa.web.deps import ServiceUnavailable, build_asker, get_asker
 from hoa_qa.web.settings import DISCLAIMER
@@ -152,16 +153,37 @@ def test_health_without_corpus_is_503(tmp_path) -> None:
     assert response.json()["status"] == "unavailable"
 
 
-def test_missing_qa_core_is_503_with_clear_message() -> None:
+def test_missing_qa_core_is_503_with_clear_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_qa_core(name: str) -> None:
+        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+    monkeypatch.setattr(web_deps.importlib, "import_module", no_qa_core)
     h = build_harness()
     h.app.dependency_overrides.clear()  # use the real get_asker
-    if importlib.util.find_spec("hoa_qa.ask") is not None:
-        pytest.skip("QA core is installed; covered by integration tests")
     response = ask(h)
     assert response.status_code == 503
     body = Answer.model_validate(response.json())
     assert body.outcome == Outcome.error
     assert "isn't set up yet" in body.answer_text
+
+
+def test_qa_core_without_api_keys_is_503(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    if importlib.util.find_spec("hoa_qa.ask") is None:
+        pytest.skip("QA core not installed")
+    for var in ("TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    h = build_harness()
+    h.app.dependency_overrides.clear()  # use the real get_asker
+    with caplog.at_level(logging.DEBUG):
+        response = ask(h)
+    assert response.status_code == 503
+    assert "isn't set up yet" in Answer.model_validate(response.json()).answer_text
+    assert "building the asker failed" in caplog.text
+    assert QUESTION not in caplog.text
 
 
 def test_fake_asker_flag_serves_canned_answers() -> None:

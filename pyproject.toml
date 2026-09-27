@@ -5,10 +5,12 @@ description = "Document-grounded Lakewood Creek HOA Q&A"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.141.1",
-    "httpx>=0.28.1",
+    "anthropic>=1.8,<2",
+    "fastapi>=0.141.1,<1",
+    "httpx>=0.28.1,<1",
     "pydantic>=2,<3",
-    "uvicorn>=0.54.0",
+    "typesafe-sdk>=0.7.2,<0.8",
+    "uvicorn>=0.54.0,<1",
 ]
 
 [project.scripts]
@@ -43,6 +45,9 @@ venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: calls the real Jev and Anthropic APIs (needs TYPESAFE_API_KEY and ANTHROPIC_API_KEY)",
+]
 
 [tool.vercel]
 # Vercel's FastAPI preset loads `app` from api/index.py (see docs/web-ops.md).

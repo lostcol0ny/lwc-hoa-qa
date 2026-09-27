@@ -91,9 +91,14 @@ def build_asker(settings: WebSettings) -> Asker:
     if build is None or settings_cls is None:
         logger.error("hoa_qa.ask lacks build_asker/QASettings")
         raise ServiceUnavailable("The Q&A service isn't set up yet.")
-    from_env = getattr(settings_cls, "from_env", None)
-    qa_settings = from_env() if callable(from_env) else settings_cls()
-    return build(corpus, qa_settings)
+    try:
+        from_env = getattr(settings_cls, "from_env", None)
+        qa_settings = from_env() if callable(from_env) else settings_cls()
+        return build(corpus, qa_settings)
+    except Exception as exc:
+        # e.g. a missing API key. Log the type only; messages may hold config.
+        logger.error("building the asker failed error_type=%s", type(exc).__name__)
+        raise ServiceUnavailable("The Q&A service isn't set up yet.") from exc
 
 
 async def aclose_if_present(obj: object) -> None:
