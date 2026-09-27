@@ -38,7 +38,7 @@ def test_one_noul_per_claim_with_distinct_passages(
     jev.support = lambda statement, ids: 0.9 if "$125" in statement else 0.2
     claims = [
         evidence(
-            corpus, "Second violation is $125.", "rules-2023-fines", "rules-2023-fines"
+            corpus, "Third violation is $125.", "rules-2023-fines", "rules-2023-fines"
         ),
         evidence(corpus, "Seniors are exempt.", "rules-2023-fines"),
         evidence(corpus, "No citations survived."),

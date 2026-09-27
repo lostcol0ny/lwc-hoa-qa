@@ -15,7 +15,7 @@ def by_id(corpus: Corpus) -> dict:
 
 def test_quote_matches_after_normalization(corpus: Corpus) -> None:
     kept = check_quotes(
-        [DraftCitation(chunk_id="rules-2023-fines", quote="second  VIOLATION:\n$125")],
+        [DraftCitation(chunk_id="rules-2023-fines", quote="3RD  violation:\n$125")],
         by_id(corpus),
     )
     assert [k.chunk.id for k in kept] == ["rules-2023-fines"]
@@ -24,12 +24,12 @@ def test_quote_matches_after_normalization(corpus: Corpus) -> None:
 def test_rejections(corpus: Corpus) -> None:
     kept = check_quotes(
         [
-            DraftCitation(chunk_id="rules-2023-fines", quote="Second violation: $100"),
-            DraftCitation(chunk_id="missing", quote="First violation"),
+            DraftCitation(chunk_id="rules-2023-fines", quote="3rd violation: $100"),
+            DraftCitation(chunk_id="missing", quote="1st violation"),
             DraftCitation(chunk_id="rules-2023-fines", quote="   "),
-            DraftCitation(chunk_id="rules-2023-fines", quote="First violation: $75."),
+            DraftCitation(chunk_id="rules-2023-fines", quote="2nd violation: $75."),
             DraftCitation(chunk_id="rules-2023-fines", quote="first violation: $75."),
         ],
         by_id(corpus),
     )
-    assert [k.quote for k in kept] == ["First violation: $75."]
+    assert [k.quote for k in kept] == ["2nd violation: $75."]

@@ -221,5 +221,8 @@ The processed corpus (`corpus.json`) is built in CI and never committed.
 `tests/fixtures/mini_corpus.json` is test data, not an authoritative source:
 `blog-2022-violations` and `declaration-8-assessment` are verbatim excerpts with
 real source URLs; `website-2026-dues` is the verbatim banner with a synthetic
-URL; the other chunks are synthetic passages on example.org URLs. Its source
-hashes describe the fixture text.
+URL; the other chunks are synthetic passages on example.org URLs. The synthetic
+fine chunks mirror the real tier structure: 2023 Rules, 1st courtesy letter /
+2nd $75 / 3rd $125 / 4th and subsequent $75 per day; 2016 rules (and the blog),
+written warning / $50 / $100 / $50 per day. Its source hashes are the SHA-256
+of each document's chunk texts joined by newlines.

@@ -360,7 +360,7 @@ def test_runner_with_the_real_asker_and_fake_providers(tmp_path: Path) -> None:
 
     golden = write_golden(
         tmp_path / "golden.yaml",
-        [{**FINE_CASE, "question": "What is the fine for a second violation?"}],
+        [{**FINE_CASE, "question": "What is the fine for a third violation?"}],
     )
     out = tmp_path / "out.json"
     code = main(
