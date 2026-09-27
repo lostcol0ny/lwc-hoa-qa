@@ -252,6 +252,12 @@ main { flex: 1; padding-bottom: 2rem; }
 
   .beam-animated .beam::before { animation: beam-travel 7s linear infinite; }
   .beam-animated .composer.is-busy .beam::before { animation-duration: 2.6s; }
+  .composer.beam-paused .beam::before { animation-play-state: paused; }
+}
+
+/* The blurred glow is the costly layer; phones and touch devices skip it. */
+@media (max-width: 480px), (pointer: coarse) {
+  .beam-glow { display: none; }
 }
 
 @keyframes beam-travel {
@@ -410,6 +416,6 @@ h3 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform
   .beam-glow { display: none; }
   .composer.is-busy .beam::before { opacity: 0.6; }
   .dots span { animation: none; opacity: 0.7; }
-  .spinner { animation-duration: 2.4s; }
+  .spinner { animation: none; } /* the loading text already says it's working */
   .send { transition: none; }
 }

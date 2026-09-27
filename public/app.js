@@ -217,6 +217,20 @@ if (typeof document !== "undefined") {
       }
     }
 
+    // Pause the beam while the tab is hidden or the composer is offscreen;
+    // the static ring stays either way.
+    let composerVisible = true;
+    function updateBeamPause() {
+      composer.classList.toggle("beam-paused", document.hidden || !composerVisible);
+    }
+    document.addEventListener("visibilitychange", updateBeamPause);
+    if (typeof IntersectionObserver === "function") {
+      new IntersectionObserver(function (entries) {
+        composerVisible = entries[entries.length - 1].isIntersecting;
+        updateBeamPause();
+      }).observe(composer);
+    }
+
     textarea.addEventListener("input", updateCounter);
     textarea.addEventListener("compositionstart", function () {
       composing = true;
@@ -248,5 +262,6 @@ if (typeof document !== "undefined") {
     });
 
     updateCounter();
+    updateBeamPause();
   })();
 }
