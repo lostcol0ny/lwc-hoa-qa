@@ -375,8 +375,14 @@ class FailClosedBudgetStore:
 
 
 def upstash_config(env: Mapping[str, str]) -> tuple[str, str] | None:
-    url = env.get("UPSTASH_REDIS_REST_URL", "").strip()
-    token = env.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
+    url = (
+        env.get("UPSTASH_REDIS_REST_URL", "").strip()
+        or env.get("KV_REST_API_URL", "").strip()
+    )
+    token = (
+        env.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
+        or env.get("KV_REST_API_TOKEN", "").strip()
+    )
     return (url, token) if url and token else None
 
 

@@ -111,8 +111,9 @@ default".
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | QA core, web | Link in refusals, not-found and budget pages; must be `https://` |
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | web | Hard monthly spend cap (UTC calendar month) |
 | `BUDGET_RESERVE_PER_REQUEST_USD` | `0.05` | web | Minimum per-question reservation R |
-| `UPSTASH_REDIS_REST_URL` | unset | web | Shared budget and rate-limit counters; **required in production** (the budget fails closed without it) |
-| `UPSTASH_REDIS_REST_TOKEN` | unset | web | Read-write REST token for the above |
+| `UPSTASH_REDIS_REST_URL` | unset | web | Shared counters; takes precedence over `KV_REST_API_URL` |
+| `UPSTASH_REDIS_REST_TOKEN` | unset | web | Read-write REST token; takes precedence over `KV_REST_API_TOKEN` |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | web | Marketplace fallback credentials; URL and writable token **required in production** (otherwise budget fails closed). `KV_REST_API_READ_ONLY_TOKEN` is never used |
 | `RATE_LIMIT_PER_HOUR` | `10` | web | Per-IP questions per hour |
 | `RATE_LIMIT_PER_DAY` | `50` | web | Per-IP questions per day |
 | `CORPUS_PATH` | `corpus.json` | web | Corpus file, relative to the working directory |
@@ -182,10 +183,9 @@ Do these in order.
    tuned against; re-run this eval and re-tune before changing it.
 4. Set provider-side spend limits in the Anthropic console (and at TypeSafe if
    it offers them).
-5. Create the Vercel project (turn off automatic Git deployments) and add
-   Upstash Redis from the Vercel Marketplace. If the integration injects
-   `KV_REST_API_URL`/`KV_REST_API_TOKEN` (or other `KV_*` names), also set
-   `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` to the same values.
+5. Create the Vercel project and add Upstash Redis from the Vercel Marketplace.
+   Its `KV_REST_API_URL`/`KV_REST_API_TOKEN` work directly. `vercel.json`
+   disables automatic Git deployments so **Deploy** bundles the corpus.
 6. Set the Vercel environment variables: `TYPESAFE_API_KEY`,
    `ANTHROPIC_API_KEY`, `MONTHLY_BUDGET_USD` (at least R, see above) and
    `HOA_DOCUMENTS_URL` (plus any threshold you tuned in step 3).
@@ -210,7 +210,8 @@ changing one, **redeploy**: push to `main`, or open the latest **Deploy** run on
 TypeSafe, Upstash, Vercel account tokens). Update it everywhere it's used:
 the GitHub secret (`TYPESAFE_API_KEY`/`ANTHROPIC_API_KEY` for eval and the
 opt-in cleanup build, `VERCEL_TOKEN` for deploy) and the Vercel environment
-variable (the two API keys, `UPSTASH_REDIS_REST_TOKEN`). Redeploy, check
+variable (the two API keys, `UPSTASH_REDIS_REST_TOKEN` or its fallback
+`KV_REST_API_TOKEN`). Redeploy, check
 `/api/health` and ask one question, then revoke the old key.
 
 **The budget tripped** (every question gets `budget_exhausted`):

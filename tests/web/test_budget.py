@@ -19,6 +19,7 @@ from hoa_qa.budget import (
     month_key,
     select_budget_store,
     select_counter_store,
+    upstash_config,
     usd_limit_to_micros,
     usd_to_micros,
 )
@@ -317,3 +318,42 @@ def test_without_the_lock_reservations_overspend() -> None:
         clock=FixedClock(datetime(2026, 9, 27, tzinfo=UTC)), counters=counters
     )
     assert asyncio.run(_concurrent_reservations(store, 20)) > 3
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("blank", [False, True])
+def test_upstash_env_precedence_and_fallback(explicit: bool, blank: bool) -> None:
+    env = {
+        "VERCEL_ENV": "production",
+        "KV_REST_API_URL": " https://kv.example ",
+        "KV_REST_API_TOKEN": " kv-write-token ",
+        "KV_REST_API_READ_ONLY_TOKEN": "read-only-token",
+    }
+    if blank:
+        env.update({key: " " for key in UPSTASH_ENV})
+    if explicit:
+        env.update(UPSTASH_ENV)
+    expected = (
+        (UPSTASH_ENV["UPSTASH_REDIS_REST_URL"], UPSTASH_ENV["UPSTASH_REDIS_REST_TOKEN"])
+        if explicit
+        else ("https://kv.example", "kv-write-token")
+    )
+    assert upstash_config(env) == expected
+    counters = select_counter_store(env)
+    assert isinstance(counters, UpstashCounterStore)
+    budget = select_budget_store(env, counters)
+    assert isinstance(budget, CounterBudgetStore)
+    assert budget.counters is counters
+    asyncio.run(counters.aclose())
+
+
+@pytest.mark.parametrize("url_key", ["UPSTASH_REDIS_REST_URL", "KV_REST_API_URL"])
+def test_read_only_token_never_configures_store(url_key: str) -> None:
+    env = {
+        "VERCEL_ENV": "production",
+        url_key: "https://kv.example",
+        "KV_REST_API_READ_ONLY_TOKEN": "read-only-token",
+    }
+    assert upstash_config(env) is None
+    assert isinstance(select_counter_store(env), InMemoryCounterStore)
+    assert isinstance(select_budget_store(env), FailClosedBudgetStore)

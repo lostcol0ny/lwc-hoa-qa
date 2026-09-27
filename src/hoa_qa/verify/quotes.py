@@ -28,11 +28,13 @@ _QUOTE_MAP = str.maketrans(
     }
 )
 _WHITESPACE = re.compile(r"\s+")
+_PUNCTUATION_SPACE = re.compile(r"\s*([;,:()\[\]{}/])\s*")
 
 
 def normalize(text: str) -> str:
-    """Straighten quotes, fold ellipses/dashes, collapse whitespace, casefold."""
-    return _WHITESPACE.sub(" ", text.translate(_QUOTE_MAP)).strip().casefold()
+    """Fold typography and punctuation spacing without joining words or digits."""
+    text = _WHITESPACE.sub(" ", text.translate(_QUOTE_MAP)).strip().casefold()
+    return _PUNCTUATION_SPACE.sub(r"\1", text)
 
 
 @dataclass(frozen=True)
