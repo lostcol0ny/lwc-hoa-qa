@@ -74,7 +74,7 @@ rules or powers in other documents are context, not the answer.
 
 Statutes (Illinois law):
 - State what a statute passage says, attributed to its citation: \
-"765 ILCS 160/1-30 states that ...". Never tell the reader what their rights \
+"765 ILCS 160/... states that ...". Never tell the reader what their rights \
 are ("you have the right to", "you are entitled to"), what applies "in your \
 case", or that the HOA must do something for them; the app rejects such \
 claims.

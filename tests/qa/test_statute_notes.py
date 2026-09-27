@@ -183,7 +183,7 @@ def test_advice_screen_is_narrow() -> None:
 
 def test_prompt_rules_for_statutes(statute_corpus: Corpus) -> None:
     text = " ".join(SYSTEM_PROMPT.split())
-    assert '"765 ILCS 160/1-30 states that ..."' in text
+    assert '"765 ILCS 160/... states that ..."' in text
     assert "Never tell the reader what their rights are" in text
     assert "never state or imply either" in text
     statute = next(c for c in statute_corpus.chunks if c.id == "cicaa-1-30")
