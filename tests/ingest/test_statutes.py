@@ -20,6 +20,7 @@ from hoa_qa.ingest.statutes import (
     README_URL,
     SEQUENCE_URL,
     Snapshot,
+    _pack,
     check_current,
     file_url,
     in_force,
@@ -486,3 +487,17 @@ def test_snapshot_manifest_is_reviewable_json() -> None:
     manifest = json.loads((ROOT / "statutes/cicaa/manifest.json").read_text())
     assert manifest["listing_url"] == LISTING_URL
     assert manifest["through_public_act"]
+
+
+def test_a_list_lead_in_stays_with_its_first_item() -> None:
+    body = "(a) " + "x" * 20
+    lead = "(b) Keep these:"
+    item = "(i) first item"
+    # Without the rule the lead-in would end the first part (40 of 40 chars).
+    assert _pack([body, lead, item], 40) == [[body], [lead, item]]
+    # A lead-in that is the whole part, or can't fit with its item, stays.
+    assert _pack([lead, item], 20) == [[lead], [item]]
+    assert _pack([body, lead, "(i) " + "y" * 30], 40) == [
+        [body, lead],
+        ["(i) " + "y" * 30],
+    ]

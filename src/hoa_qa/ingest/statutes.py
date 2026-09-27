@@ -536,9 +536,16 @@ def _pack(lines: list[str], limit: int) -> list[list[str]]:
         if groups and size + 1 + len(unit) <= limit:
             groups[-1].append(unit)
             size += 1 + len(unit)
-        else:
-            groups.append([unit])
-            size = len(unit)
+            continue
+        # Keep a list's lead-in ("... shall maintain the following records:")
+        # with its first item, so one part states the whole requirement.
+        carried: list[str] = []
+        if groups and len(groups[-1]) > 1 and groups[-1][-1].endswith(":"):
+            lead = groups[-1][-1]
+            if len(lead) + 1 + len(unit) <= limit:
+                carried = [groups[-1].pop()]
+        groups.append([*carried, unit])
+        size = sum(len(u) + 1 for u in groups[-1]) - 1
     return groups
 
 
