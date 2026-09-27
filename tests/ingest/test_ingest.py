@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from hoa_qa.ingest import build
 from hoa_qa.ingest.cleanup import clean, normalize, numeric_tokens
 from hoa_qa.ingest.extract import Page, blog_text, extract, web_pages
-from hoa_qa.ingest.fetch import Fetcher
+from hoa_qa.ingest.fetch import Fetcher, FetchError
 from hoa_qa.ingest.pii import check_pii
 from hoa_qa.ingest.section import citation, parts, sections
 from hoa_qa.ingest.sources import Source, load_sources
@@ -62,34 +62,64 @@ def test_blog_missing_body_fails(html: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("doc_id", "fixture", "expected"),
+    ("doc_id", "fixture", "expected", "major"),
     [
-        ("bylaws", "bylaws.txt", ["article-3", "3.3", "3.4", "article-4", "4.1"]),
-        ("rules-2023", "rules.txt", ["article-2", "2.8", "2.9", "2.10"]),
+        # Heading-only "Article N" / "SECTION N" sections fold into their first child.
+        ("bylaws", "bylaws.txt", ["3.3", "3.4", "4.1"], "Article 3"),
+        ("rules-2023", "rules.txt", ["2.8", "2.9", "2.10"], "SECTION 2"),
     ],
 )
-def test_structured_sections(doc_id: str, fixture: str, expected: list[str]) -> None:
+def test_structured_sections(
+    doc_id: str, fixture: str, expected: list[str], major: str
+) -> None:
     pages = [Page((FIXTURES / fixture).read_text(), 2, "1")]
     result = sections(source(doc_id), pages)
     assert [s.key for s in result] == expected
     assert result == sections(source(doc_id), pages)
     assert all(s.heading for s in result)
-    assert "Holiday" not in result[1].text
-
-
-def test_minutes_motion_and_outcome_stay_together() -> None:
-    s = source("minutes-2022-12-29", kind="blog_post", authority="board_decision")
-    result = sections(s, [Page((FIXTURES / "minutes.txt").read_text())])
-    motion = next(p for p in result if "Vote to adopt" in p.text)
-    assert "Motion approved." in motion.text
-    assert "Adjournment" not in motion.text
-    assert len(result) == 4
-    assert parts(motion, keep_together=True) == [motion]
-    unresolved = sections(
-        s, [Page("lV. Old Business:\nA. Bid received.\nVl l: Adjournment:")]
+    assert result[0].heading[0].startswith(major)
+    assert major.split()[0] in result[0].text
+    assert "Holiday" not in result[0].text
+    word = "Section" if doc_id.startswith("rules") else "Article"
+    assert citation(source(doc_id), result[0]).startswith(
+        f"{doc_id.title()}, {word} {expected[0][0]}, §{expected[0]}"
     )
-    assert len(unresolved) == 2
-    assert "approved" not in unresolved[0].text
+
+
+def test_minutes_one_chunk_per_meeting() -> None:
+    s = source(
+        "minutes-2022-12-29",
+        title="December 29, 2022 Minutes",
+        kind="blog_post",
+        authority="board_decision",
+        effective_date="2022-12-29",
+    )
+    result = sections(s, [Page((FIXTURES / "minutes.txt").read_text())])
+    assert [r.key for r in result] == ["meeting"]
+    (meeting,) = result
+    # The budget amount and the vote that adopted it share one chunk.
+    assert "$99" in meeting.text and "Motion approved." in meeting.text
+    assert meeting.heading == ("December 29, 2022 Minutes", "Meeting 2022-12-29")
+    assert citation(s, meeting) == "December 29, 2022 Minutes, Meeting 2022-12-29"
+    assert parts(meeting, header="x") == [meeting]
+
+
+def test_long_minutes_split_only_at_agenda_items_with_date_header() -> None:
+    s = source("minutes-x", kind="blog_post", authority="board_decision")
+    items = [
+        f"{numeral}. Item {numeral}:\n" + "Discussion continued at length. " * 40
+        for numeral in ("I", "II", "III", "IV", "V", "VI")
+    ]
+    (meeting,) = sections(s, [Page("\n".join(items))])
+    header = "Minutes-X (meeting 2001-01-01)"
+    split = parts(meeting, header=header)
+    assert len(split) > 1
+    for part in split:
+        assert normalize(part.text).startswith(("I. Item I:", header))
+        # Each part starts at an agenda item, never mid-item.
+        body = part.lines[1:] if part.lines[0][0] == header else part.lines
+        assert body[0][0].split(".")[0] in {"I", "II", "III", "IV", "V", "VI"}
+    assert all(p.heading == meeting.heading for p in split)
 
 
 @pytest.mark.parametrize("replacement", ["$100", "$99.00", "99", "$9.9"])
@@ -106,7 +136,9 @@ def test_numeric_multisets_and_dates() -> None:
     assert numeric_tokens("January 1") != numeric_tokens("February 1")
     assert numeric_tokens("Section 2.9") != numeric_tokens("Section 9.2")
     fallbacks: list[str] = []
-    assert clean("Ducs $99", "x", lambda _: "Dues $99", fallbacks) == "Dues $99"
+    raw = "Quarterly Ducs are $99 and are payable to the Association in advance."
+    fixed = raw.replace("Ducs", "Dues")
+    assert clean(raw, "x", lambda _: fixed, fallbacks) == fixed
     assert not fallbacks
     assert clean(" a\n b ", "x", None, fallbacks) == "a b"
 
@@ -145,19 +177,26 @@ def test_pii_scoped_allowlist() -> None:
 
 
 def test_pdf_page_indices_and_printed_labels() -> None:
+    bodies = ["Cover", "Article 8\n8.4 Assessments.", "Cap $326.", "8.5 Capital.", "B"]
     with pymupdf.open() as pdf:
-        page = pdf.new_page()
-        page.insert_text((72, 80), "Article 8\n8.4 Assessments.\nAnnual cap $326.")
-        page.insert_text((300, 800), "23")
+        for number, body in enumerate([*bodies, "Exhibit page"], start=1):
+            page = pdf.new_page()
+            page.insert_text((72, 80), body)
+            # Printed = PDF - 1; the first body footer is lost, as in the
+            # Declaration, and the trailing exhibit page has no footer.
+            if 3 <= number <= 5:
+                page.insert_text((300, 800), str(number - 1))
         data = pdf.tobytes()
     s = source("declaration")
     pages = extract(s, data)
-    assert pages[0].number == 1 and pages[0].printed == "23"
+    assert [p.printed for p in pages] == [None, "1", "2", "3", "4", None]
     result = sections(s, pages)
-    assert citation(s, result[-1]).endswith("p. 23")
-    assert "§8.4" in citation(s, result[-1])
-    fallback = sections(s, [Page("8.4 Assessments.", 28)])
-    assert citation(s, fallback[0]).endswith("p. 28")
+    assert citation(s, result[0]) == "Declaration, PDF p. 1"
+    assert citation(s, result[1]) == "Declaration, Article 8, §8.4, pp. 1–2"
+    # Never a mixed "pp. 3–6": without a printed end page, use PDF pages throughout.
+    assert citation(s, result[2]) == "Declaration, Article 8, §8.5, PDF pp. 4–6"
+    fallback = sections(s, [Page("Article 8\n8.4 Assessments.", 28)])
+    assert citation(s, fallback[0]).endswith("PDF p. 28")
 
 
 def test_no_false_section_on_wrapped_reference_or_survey() -> None:
@@ -167,13 +206,15 @@ def test_no_false_section_on_wrapped_reference_or_survey() -> None:
         "EXHIBIT B\nSECTION 1, TOWNSHIP 37\n117.27 FEET\n"
     )
     result = sections(s, [Page(text, 28, "23")])
-    assert [x.key for x in result] == ["article-8", "8.4", "exhibit-b"]
-    assert "In the event" in result[1].text
+    assert [x.key for x in result] == ["8.4", "exhibit-b"]
+    assert "In the event" in result[0].text
 
 
 def test_long_sections_stable_and_bounded() -> None:
     s = source()
-    text = "3.4 Suspension.\n" + ("A long provision stays in its own section. " * 200)
+    text = "Article 3\n3.4 Suspension.\n" + (
+        "A long provision stays in its own section. " * 200
+    )
     text += "\n4.1 Meetings.\nA separate provision."
     result = sections(s, [Page(text, 2)])
     split = parts(result[0])
@@ -245,23 +286,41 @@ def test_end_to_end_no_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_fetch_cache_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     count = 0
 
-    def request(self: httpx.Client, url: str) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         nonlocal count
         count += 1
-        assert "LakewoodCreek" in self.headers["User-Agent"]
-        return httpx.Response(
-            503 if count == 1 else 200,
-            content=b"source",
-            request=httpx.Request("GET", url),
-        )
+        assert "LakewoodCreek" in request.headers["User-Agent"]
+        return httpx.Response(503 if count == 1 else 200, content=b"source")
 
     waits: list[int] = []
-    monkeypatch.setattr(httpx.Client, "get", request)
     monkeypatch.setattr("hoa_qa.ingest.fetch.time.sleep", waits.append)
-    fetch = Fetcher(tmp_path)
+    fetch = Fetcher(tmp_path, transport=httpx.MockTransport(handler))
     assert fetch("https://example.com/doc") == b"source"
     assert fetch("https://example.com/doc") == b"source"
     assert count == 2 and waits == [1]
+
+
+def test_fetch_refuses_http_redirect_and_oversize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/redirect":
+            return httpx.Response(302, headers={"Location": "http://example.com/x"})
+        if request.url.path == "/declared":
+            return httpx.Response(200, headers={"Content-Length": "999999999"})
+        return httpx.Response(200, content=b"x" * 64)
+
+    monkeypatch.setattr("hoa_qa.ingest.fetch.MAX_BYTES", 32)
+    fetch = Fetcher(tmp_path, transport=httpx.MockTransport(handler))
+    with pytest.raises(FetchError, match="non-HTTPS"):
+        fetch("https://example.com/redirect")
+    with pytest.raises(FetchError, match="non-HTTPS"):
+        fetch("http://example.com/plain")
+    with pytest.raises(FetchError, match="exceeds"):
+        fetch("https://example.com/declared")
+    with pytest.raises(FetchError, match="exceeds"):
+        fetch("https://example.com/streamed")
+    assert not list(tmp_path.iterdir())
 
 
 def test_build_fallback_logged_and_pii_stops_emission(tmp_path: Path) -> None:
@@ -279,14 +338,31 @@ def test_build_fallback_logged_and_pii_stops_emission(tmp_path: Path) -> None:
     )
     assert corpus.manifest.ocr_fallbacks == ("declaration-8.4",)
     assert "$99" in corpus.chunks[-1].text_clean
+    # A contact in the cleaned text (a repair that swaps a word) fails the build.
+    raw = "Article 8\n8.4 Owners pay dues to the Association; write to a@b,co now."
+    with pymupdf.open() as pdf:
+        pdf.new_page().insert_text((72, 80), raw)
+        data = pdf.tobytes()
     with pytest.raises(ValueError, match="PII check failed"):
         build(
             tmp_path / "bad",
             registry,
             fetcher=lambda _: data,
-            repair=lambda t: t + " resident@example.com",
+            repair=lambda t: t.replace("a@b,co", "a@b.co"),
         )
     assert not (tmp_path / "bad/corpus.json").exists()
+    # text_raw ships too: a contact only in the source text fails even when the
+    # repair (or --no-llm) would not surface it in text_clean.
+    with pymupdf.open() as pdf:
+        pdf.new_page().insert_text((72, 80), raw + "\nCall 312-555-0189.")
+        data = pdf.tobytes()
+    with pytest.raises(ValueError, match="PII check failed"):
+        build(
+            tmp_path / "raw",
+            registry,
+            fetcher=lambda _: data,
+            repair=lambda t: t.replace("312-555-0189", "[redacted]"),
+        )
 
 
 def test_blank_pdf_requires_review_and_exclusion() -> None:

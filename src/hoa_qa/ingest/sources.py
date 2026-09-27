@@ -1,5 +1,6 @@
 """Validated, reviewable source registry."""
 
+from datetime import date
 from pathlib import Path
 from typing import Literal, Self
 
@@ -15,7 +16,10 @@ class Source(Model):
     url: HttpsUrl
     kind: Literal["pdf", "blog_post", "web_page"]
     authority: Authority
-    effective_date: CalendarDate
+    # "crawl": website pages are dated by the build that fetched them.
+    effective_date: Literal["crawl"] | CalendarDate
+    # Displayed post date, when it differs in meaning from the content date.
+    published_date: CalendarDate = None
     superseded_by: str | None = None
     exclude_pages: tuple[int, ...] = ()
     exclude: bool = False
@@ -32,12 +36,19 @@ class Source(Model):
             raise ValueError("only PDFs have exclude_pages")
         if (self.authority == Authority.superseded) != bool(self.superseded_by):
             raise ValueError("superseded sources must name their replacement")
+        if self.effective_date == "crawl" and self.kind != "web_page":
+            raise ValueError("only web pages are dated by crawl")
         if self.effective_date is None and self.authority not in (
             Authority.form,
             Authority.superseded,
         ):
             raise ValueError("effective_date is required for this authority")
         return self
+
+    def effective(self, crawl_date: date) -> date | None:
+        if self.effective_date == "crawl":
+            return crawl_date
+        return self.effective_date
 
 
 def load_sources(path: Path) -> tuple[Source, ...]:

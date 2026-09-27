@@ -4,14 +4,15 @@ import re
 
 PHONE = re.compile(
     r"(?<!\d)(?:\+?1[ .-]?)?(?:\(\d{3}\)|\d{3})"
-    r"[ .-]\s*\d{3}[ .-]\s*\d{4}(?!\d)"
+    r"[ .-]?\s*\d{3}[ .-]?\s*\d{4}(?!\d)"
 )
 EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 ADDRESS = re.compile(
     r"\b\d{1,6}\s+(?!RIGHT\s|Correction\s)(?:(?:[NSEW]\.?|North|South|East|West)\s+)?"
     r"(?:[A-Za-z][\w'-]*\s+){1,4}"
     r"(?:Dr(?:ive)?|St(?:reet)?|Ave(?:nue)?|Ct|Court|Ln|Lane|Rd|Road|"
-    r"Blvd|Boulevard|Way|Pl(?:ace)?|Pkwy|Parkway)\b",
+    r"Blvd|Boulevard|Way|Pl(?:ace)?|Pkwy|Parkway|Cir(?:cle)?|Tr(?:ai)?l|"
+    r"Ter(?:race)?)\b",
     re.I,
 )
 
@@ -38,6 +39,8 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "2500 west higgins road": "Original HOA business office, PDF p.2",
         "118 wesp edward street": "OCR of incorporator corporation office, PDF p.3",
         "118 west edward street": "Incorporator corporation office, PDF p.3",
+        "1835400709": "IL Secretary of State certificate authentication number "
+        "(10 digits, not a phone), PDF p.8",
     },
     "clubhouse": {
         "6302735547": "Published rental attendant emergency contact, PDF p.2",
@@ -54,7 +57,9 @@ ALLOWLIST: dict[str, dict[str, str]] = {
 
 def normalized_hit(hit: str, phone: bool = False) -> str:
     if phone:
-        return re.sub(r"\D", "", hit).removeprefix("1")
+        digits = re.sub(r"\D", "", hit)
+        # Only an 11-digit number carries the +1 country code.
+        return digits[1:] if len(digits) == 11 and digits[0] == "1" else digits
     return (
         " ".join(hit.lower().replace(".", "").split())
         if "@" not in hit

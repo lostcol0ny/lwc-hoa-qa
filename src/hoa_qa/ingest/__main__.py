@@ -18,7 +18,8 @@ def main() -> None:
     args = parser.parse_args()
     if not 0 <= args.max_ocr_fallback_fraction <= 1:
         parser.error("--max-ocr-fallback-fraction must be between 0 and 1")
-    corpus = build(args.out, args.sources, no_llm=args.no_llm)
+    warnings: list[str] = []
+    corpus = build(args.out, args.sources, no_llm=args.no_llm, warnings=warnings)
     print(
         json.dumps(
             {
@@ -26,6 +27,7 @@ def main() -> None:
                 "chunks": len(corpus.chunks),
                 "token_estimate": sum(c.token_estimate for c in corpus.chunks),
                 "ocr_fallbacks": list(corpus.manifest.ocr_fallbacks),
+                "section_warnings": warnings,
             },
             indent=2,
         )

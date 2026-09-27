@@ -3,7 +3,7 @@
 import hashlib
 import math
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from hoa_qa.ingest.cleanup import OCRCleanup, clean
@@ -24,7 +24,18 @@ def build(
     no_llm: bool = False,
     fetcher: Callable[[str], bytes] | None = None,
     repair: Callable[[str], str] | None = None,
+    crawl_date: date | None = None,
+    warnings: list[str] | None = None,
 ) -> Corpus:
+    """Build and atomically write the corpus.
+
+    ``crawl_date`` dates ``effective_date: crawl`` sources (default: today, UTC).
+    Sectioning warnings (rejected non-monotonic headings) are appended to
+    ``warnings`` when given.
+    """
+    build_time = datetime.now(UTC)
+    crawl_date = crawl_date or build_time.date()
+    warnings = warnings if warnings is not None else []
     sources = load_sources(sources_path)
     fetch = fetcher if fetcher is not None else Fetcher(out / "cache")
     cleanup = None if no_llm else (repair if repair is not None else OCRCleanup())
@@ -40,13 +51,13 @@ def build(
         pages = extract(source, data)
         if not pages:
             raise ValueError(f"{source.doc_id}: no extracted pages")
-        for section in sections(source, pages):
+        effective = source.effective(crawl_date)
+        header = None
+        if source.authority.value == "board_decision":
+            header = f"{source.title} (meeting {effective})"
+        for section in sections(source, pages, warnings):
             for part in parts(
-                section,
-                keep_together=(
-                    source.authority.value == "board_decision"
-                    or source.doc_id == "arch-form"
-                ),
+                section, keep_together=source.doc_id == "arch-form", header=header
             ):
                 chunk_id = f"{source.doc_id}-{part.key}"
                 raw = part.text
@@ -56,10 +67,12 @@ def build(
                     cleanup if source.doc_id in OCR_SOURCES else None,
                     fallbacks,
                 )
-                try:
-                    check_pii(text, source.doc_id)
-                except ValueError as exc:
-                    errors.append(f"{chunk_id}: {exc}")
+                # text_raw ships in the corpus too, so both texts are checked.
+                for checked in (text, raw):
+                    try:
+                        check_pii(checked, source.doc_id)
+                    except ValueError as exc:
+                        errors.append(f"{chunk_id}: {exc}")
                 chunks.append(
                     Chunk(
                         id=chunk_id,
@@ -73,17 +86,17 @@ def build(
                         text_clean=text,
                         text_raw=raw,
                         authority=source.authority,
-                        effective_date=source.effective_date,
-                        published_date=None,
+                        effective_date=effective,
+                        published_date=source.published_date,
                         superseded_by=source.superseded_by,
                         token_estimate=math.ceil(len(text) / 4),
                     )
                 )
     if errors:
-        raise ValueError("\n".join(errors))
+        raise ValueError("\n".join(dict.fromkeys(errors)))
     corpus = Corpus(
         manifest=CorpusManifest(
-            build_time=datetime.now(UTC),
+            build_time=build_time,
             source_hashes=hashes,
             chunk_count=len(chunks),
             ocr_fallbacks=tuple(fallbacks),

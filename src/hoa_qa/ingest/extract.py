@@ -1,13 +1,20 @@
 """Extract page-aware text, retaining source structure and PDF link indices."""
 
 import json
+import logging
 import re
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 
 import pymupdf
 from bs4 import BeautifulSoup
 
 from hoa_qa.ingest.sources import Source
+
+log = logging.getLogger(__name__)
+# Printed pagination is trusted only when enough pages agree on one offset.
+MIN_PRINTED_DETECTIONS = 3
+MIN_PRINTED_AGREEMENT = 0.8
 
 
 @dataclass(frozen=True)
@@ -48,7 +55,8 @@ def blog_text(html: str) -> str:
             body = json.loads(content)
             blocks = body["blocks"]
             if not isinstance(blocks, list) or any(
-                not isinstance(block.get("text"), str) for block in blocks
+                not isinstance(block, dict) or not isinstance(block.get("text"), str)
+                for block in blocks
             ):
                 raise ValueError("invalid Draft.js blocks")
             text = "\n".join(block["text"] for block in blocks)
@@ -57,7 +65,7 @@ def blog_text(html: str) -> str:
         if not text:
             raise ValueError("empty post body")
         return text
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid _BLOG_DATA.post.fullContent") from exc
 
 
@@ -119,4 +127,44 @@ def extract(source: Source, data: bytes) -> list[Page]:
                     "document an exclusion or OCR before building"
                 )
             pages.append(Page(text, number, printed))
-    return pages
+    return printed_pages(pages, source.doc_id)
+
+
+def printed_pages(pages: list[Page], doc_id: str) -> list[Page]:
+    """Apply one modal PDF-to-printed offset across the paginated body.
+
+    Footer detection misses some scanned pages, and a label must never mix
+    printed and PDF numbers. With enough agreeing detections, every page between
+    printed page 1 and the last detection gets ``number - offset``; pages outside
+    that body range (cover, trailing exhibits without footers) keep
+    ``printed=None``. Without a
+    reliable offset, no page gets a printed number.
+    """
+    detected = [
+        (p.number, int(p.printed)) for p in pages if p.number and p.printed is not None
+    ]
+    offsets = Counter(number - printed for number, printed in detected)
+    if not offsets:
+        return pages
+    offset, votes = offsets.most_common(1)[0]
+    if votes < MIN_PRINTED_DETECTIONS or votes / len(detected) < MIN_PRINTED_AGREEMENT:
+        return [replace(p, printed=None) for p in pages]
+    agreeing = [number for number, printed in detected if number - printed == offset]
+    # The body starts at printed page 1 even when early footers were not detected
+    # (the Declaration's first footer is found on PDF p.16 = printed 11).
+    first, last = min(min(agreeing), offset + 1), max(agreeing)
+    result = []
+    for page in pages:
+        printed = None
+        if page.number is not None and first <= page.number <= last:
+            printed = str(page.number - offset)
+            if page.printed is not None and page.printed != printed:
+                log.warning(
+                    "%s PDF p.%s: footer %s disagrees with offset; using %s",
+                    doc_id,
+                    page.number,
+                    page.printed,
+                    printed,
+                )
+        result.append(replace(page, printed=printed))
+    return result
