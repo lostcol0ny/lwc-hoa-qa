@@ -249,3 +249,80 @@ cases:
       would also be safe but fails this case; tune if that happens. The
       forbidden phrases are substrings, so "free" also matches "freely" or
       "free of"; check a failure before tuning.
+
+  # --- Illinois statutes (statutes addendum §8) -------------------------------------
+  - id: statute-records-inspection
+    question: Can I inspect the Association's financial records?
+    expect_outcome: answered
+    expect_chunk_ids_any: [cicaa-1-30-c, cicaa-1-30-d, nfp-act-107.75-a, nfp-act-107.75-b]
+    must_include: ["This quotes Illinois law"]
+    must_not_include: ["violat", "breaking the law", "you have the right", "you are entitled"]
+    notes: >-
+      Records inspection is in CICAA §1-30(i) and 805 ILCS 105/107.75 (the
+      Declaration §10.1.5 points to the NFP Act too). A statute citation
+      brings the code-written disclaimer; the answer states what the statutes
+      say and never that the HOA is breaking them.
+
+  - id: statute-cicaa-applies
+    question: Does the Common Interest Community Association Act apply to Lakewood Creek?
+    expect_outcome: answered
+    expect_chunk_ids_any: [cicaa-1-75]
+    must_include: ["roughly $332,000", "Confirm with the Board or an attorney"]
+    must_not_include:
+      - "cicaa applies to lakewood creek"
+      - "the act applies to lakewood creek"
+      - "lakewood creek is not exempt"
+      - "lakewood creek is exempt"
+    notes: >-
+      §1-75 exempts small associations. Whether it applies is a legal
+      conclusion, so the answer quotes §1-75 and the code-built applicability
+      note (735 homes × $452, from amendments-committee-intro and home-1)
+      says what the figures suggest without settling it.
+
+  - id: statute-director-removal
+    question: How can a director be removed from the Board?
+    expect_outcome: answered
+    expect_chunk_ids_any: [nfp-act-108.35-a, nfp-act-108.35-b]
+    must_include: ["This quotes Illinois law"]
+    must_not_include: ["you have the right", "you are entitled", "in your case", "you should"]
+    notes: >-
+      805 ILCS 105/108.35 sets out removal (two-thirds of votes present and
+      voted, with notice naming the director); Bylaws §5.3 says a majority of
+      the Members. Citing the Bylaws as well is welcome; advice is not.
+
+  - id: statute-future-website
+    question: Will Illinois law require our association to have a website starting in 2027?
+    expect_outcome: not_found
+    must_not_include_anywhere:
+      - "must have a website"
+      - "must maintain a website"
+      - "required to have a website"
+      - "required to maintain a website"
+    notes: >-
+      CICAA amendments effective 2027-01-01 (P.A. 104-734 and 104-797) are
+      future law: ingestion keeps only text in force on the build date, so no
+      passage states them and the bot must not present them as current.
+
+  - id: statute-hoa-fees
+    question: What are the HOA fees?
+    expect_outcome: answered
+    expect_chunk_ids_any: [home-1]
+    must_include: [["$452", "452 dollars", "$113 per quarter", "$113 a quarter"]]
+    must_not_include_anywhere: ["805 ILCS 105/115", "Secretary of State"]
+    notes: >-
+      "Fees" must mean the HOA's assessments (home-1), never the NFP Act's
+      Article 15 filing fees charged by the Secretary of State.
+
+  - id: statute-bylaws-meeting-conflict
+    question: How often must the Board of Directors meet?
+    expect_outcome: answered
+    expect_chunk_ids_any: [cicaa-1-30-a, bylaws-7.1]
+    must_include:
+      - ["4 times", "four times"]
+      - ["semi-annual", "twice a year", "twice each year", "two times a year", "every six months"]
+    must_not_include: ["controls", "prevails", "takes precedence", "overrides", "violat"]
+    notes: >-
+      A real statute/HOA difference: 765 ILCS 160/1-30(a) says at least 4
+      times annually; Bylaws §7.1 says regular meetings at least
+      semi-annually. Both are reported (the difference as a conflict note);
+      the bot never says which one wins.

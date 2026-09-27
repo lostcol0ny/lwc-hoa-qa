@@ -207,3 +207,27 @@
   authority: website
   effective_date: crawl
   notes: Dated by the build that fetched it (UTC crawl date).
+- doc_id: cicaa
+  title: Common Interest Community Association Act
+  url: https://ftp.ilga.gov/ILCS/Ch%200765/Act%200160/
+  kind: statute
+  authority: statute
+  effective_date: section
+  ilcs:
+    chapter: 765
+    act: 160
+    articles:
+    - '1'
+  notes: Article 1 only (Article 5 amends other Acts; Article 99 is the effective date).
+    Current in-force text from ILGA's file repository; the 2022 IDFPR PDF is outdated
+    and is not ingested. Each section is dated by its own source note.
+- doc_id: nfp-act
+  title: General Not For Profit Corporation Act of 1986
+  url: https://ftp.ilga.gov/ILCS/Ch%200805/Act%200105/
+  kind: statute
+  authority: statute
+  effective_date: section
+  ilcs:
+    chapter: 805
+    act: 105
+  notes: Full Act. Each section is dated by its own source note.

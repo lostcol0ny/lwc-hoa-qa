@@ -79,16 +79,143 @@ and are dated with the build's UTC date, so a local build over an old cache date
 them by the build, not the download. CI starts with a fresh source cache. New discovered
 sources need a reviewed registry entry; ingestion does not silently expand scope.
 
+## Illinois statutes
+
+Two Acts are `statute` sources (addendum spec
+`docs/specs/2026-09-27-statutes-addendum.md`), ranked above the governing
+documents:
+
+| Source ID | Act | Scope |
+|---|---|---|
+| `cicaa` | Common Interest Community Association Act, 765 ILCS 160 | Article 1 (Article 5 amends other Acts; Article 99 is the effective date) |
+| `nfp-act` | General Not For Profit Corporation Act of 1986, 805 ILCS 105 | All 17 Articles |
+
+The 2022 IDFPR CICAA PDF is **not** a source: it predates the 2024 amendments.
+
+### Where the text comes from, and why it is committed
+
+ILGA's `robots.txt` sets `Crawl-delay: 10`, and ILGA.gov blocks non-browser
+clients with a page telling automated systems to use the public file
+repository, `https://ftp.ilga.gov/`, instead. The ingest never fetches
+ILGA.gov. The repository's ILCS tree is a **static copy that ILGA
+regenerates about once a year** ("generally updated in the Fall"; its
+`aReadMe.txt` says the current copy was updated 2025-11-21 through Public
+Act 104-433), with one HTML file per section and per Article heading.
+
+Fetching the ~190 files at the crawl delay takes about 32 minutes, longer
+than the build and eval workflows' 30-minute limit. Since the files change
+about once a year, they are committed as a reviewed snapshot:
+
+- `statutes/<doc_id>/*.html`: the files exactly as downloaded
+  (`.gitattributes` keeps git from touching their line endings).
+- `statutes/<doc_id>/manifest.json`: the directory listing (name, size,
+  timestamp), ILCS order from ILGA's `Section Sequence.txt`, the `aReadMe`
+  update date and last Public Act, and a SHA-256 per file.
+
+Every build hash-checks the snapshot and re-fetches only the Act's directory
+listing (two requests, uncached, at the crawl delay). If ILGA's listing
+differs from the snapshot, the build **fails** with instructions to run
+
+```sh
+uv run python -m hoa_qa.ingest refresh-statutes   # ~32 minutes
+```
+
+and review and commit the result (README, Day-2 operations, "Annual statute
+refresh"). The manifest's `source_hashes` entry for a statute is the SHA-256
+of its `manifest.json`, and `statute_compilation` records ILGA's update date
+and last Public Act for the answer disclaimer.
+
+**Known gap of the annual copy.** On 2026-09-27 the live ILGA compilation
+had one section in force that the 2025 copy lacks: 805 ILCS 105/108.22
+(distribution electric cooperatives, P.A. 104-458, eff. 2026-06-01), which
+does not concern homeowners associations. Every other in-force section's
+source note matched. ILGA's next annual copy should include it; there is no
+automated path to text newer than the copy that respects ILGA's policy.
+
+### TLS
+
+ILGA's servers (ftp and www) send only their leaf certificate, without the
+Sectigo intermediate that signed it, so no non-browser client can build a
+chain. The intermediate, *Sectigo Public Server Authentication CA OV R40*
+(`src/hoa_qa/ingest/certs/sectigo-ov-r40.pem`, SHA-256 fingerprint in the
+file, valid to 2040), is **added** to certifi's roots; verification is
+never disabled. `VERIFY_X509_PARTIAL_CHAIN` is cleared, so the intermediate
+cannot act as a trust anchor on its own: a server certificate is accepted
+only because the intermediate itself verifies against certifi's *Sectigo
+Public Server Authentication Root R46*. If ILGA changes issuers, fetching
+fails loudly; replace the file after checking the new intermediate chains to
+a certifi root (`openssl verify`). `Fetcher` also waits out per-host crawl
+delays (`CRAWL_DELAYS`), counting retries as requests.
+
+### Versions in force
+
+Each section container can hold several versions, marked "(Text of Section
+before amendment by P.A. N)", "(... after amendment by P.A. N)" or "(... from
+P.A. N)", each closed by its "(Source: P.A. ...)" note. `ingest.statutes`
+keeps only the text in force on the build date:
+
+- A version's date is the effective date of the **latest Public Act** in its
+  source note. Old Acts (the 1986 original, for example) carry no date there;
+  those sections have `effective_date: null` and are treated as long in
+  force.
+- "before amendment by P.A. N" is law until its "after" twin takes effect.
+- Of several in-force "from P.A. N" versions (parallel amendments), only
+  those with the latest date remain.
+- A section with only future-effective text is left out, with a
+  `section_warnings` entry: ILGA may already have removed the current text.
+- Versions are never deduplicated by section number alone, and the build
+  fails if any ingested statute chunk is dated after the build date.
+
+**Around 2027-01-01.** P.A. 104-734, 104-797 and 104-580 amend CICAA §§1-30,
+1-35, 1-45 and add §1-73, effective 2027-01-01. The current annual copy does
+not contain them yet. When ILGA's next copy does, the build fails until the
+snapshot is refreshed; after that, monthly builds before 2027-01-01 keep the
+current text and the first build on or after 2027-01-01 switches to the
+amended text, with no code change.
+
+### Chunks and citations
+
+One chunk per section version, split at subsection lines and then sentences
+when over 1,600 characters (~400 tokens, half the limit for other sources;
+`-a`, `-b` parts). A long section is a dense run of numbered provisions, and
+the support check judges a claim against its whole cited part: on the eval
+of 2026-09-27 a correct claim quoting §1-30's records list failed support
+against a ~2,900-character part. A list's lead-in ("... shall maintain the
+following records:") always stays in the part with its first item. Every part starts with a context
+line naming the Act, Article, section, latest Public Act and effective date
+(continuations end it with "(continued)"), for example:
+
+> Common Interest Community Association Act (765 ILCS 160), Article 1: 765
+> ILCS 160/1-30 (Board duties and obligations; records), as amended by P.A.
+> 103-486, effective 2024-01-01.
+
+The 2026-09-27 build has 52 CICAA and 256 NFP Act chunks (~72K estimated
+tokens; the whole corpus is 668 chunks, ~150K). Chunk ids are
+`cicaa-1-30-a`, `nfp-act-107.75-a`, `nfp-act-101.01`; parallel versions add
+`-paN`. The citation label is the official citation plus caption
+(`805 ILCS 105/107.75 (Books and records)`), and the link is the section's
+own file on ftp.ilga.gov, the most specific stable public ILGA URL. Statute
+text needs no OCR cleanup, so `text_raw` equals `text_clean`, and it passes
+the same contact-information gate.
+
+### CICAA applicability evidence
+
+The answer's CICAA applicability note (see docs/qa-core.md) uses the home
+count from `amendments-committee-intro` ("492 of 735 homes") and the dues
+from `home-1` ("$452 year"), configured in `hoa_qa/answer/statute_notes.py`.
+The build fails if either chunk, or §1-75's "$100,000" exemption text, is
+missing or no longer says that, so a dues change is caught at build time.
+
 ## Source authority and dates
 
 The inventory's 22 documents comprise seven PDFs and 15 posts, including the
-excluded post. Home, FAQ, and About add three registry entries: **25 total, 24
-included**. `effective_date` is the content date (the meeting date for minutes)
-and `published_date` the displayed post date. The March 2025 newsletter is
-effective 2025-03-01 and published 2025-05-29; Tips for Responding to HOA
-Violations is dated by its displayed 2022-10-20 (its 2025 metadata timestamp is a
-republication). Year-only dates use January 1, with the year shown in
-governing-document citations.
+excluded post. Home, FAQ, and About add three registry entries, and the two
+Illinois statutes two more: **27 total, 26 included**. `effective_date` is the
+content date (the meeting date for minutes) and `published_date` the displayed
+post date. The March 2025 newsletter is effective 2025-03-01 and published
+2025-05-29; Tips for Responding to HOA Violations is dated by its displayed
+2022-10-20 (its 2025 metadata timestamp is a republication). Year-only dates use
+January 1, with the year shown in governing-document citations.
 
 | Source ID | Authority | Effective date | Treatment |
 |---|---|---|---|
@@ -117,6 +244,8 @@ governing-document citations.
 | `home` | website | build crawl date | Included |
 | `faq` | website | build crawl date | Included |
 | `about` | website | build crawl date | Included |
+| `cicaa` | statute | per section (source note) | Included: Article 1 |
+| `nfp-act` | statute | per section (source note) | Included: whole Act |
 
 ## Sectioning, citations, and deduplication
 
@@ -272,8 +401,11 @@ current (the `<2` bound admits security releases).
 
 `.github/workflows/build-corpus.yml` runs manually, for relevant pushes to main,
 and monthly (cron `17 6 1 * *`). The monthly run re-crawls the website pages
-(dated by that crawl) and keeps a fresh `corpus` artifact inside its 90-day
-retention for deploy. It installs `uv sync --locked --group ingest` and uses the
+(dated by that crawl), re-selects the statute versions in force on its date
+(so amendments already in the snapshot take effect on schedule, such as the
+CICAA changes on 2027-01-01), re-checks ILGA's listings, and keeps a fresh
+`corpus` artifact inside its 90-day retention for deploy. The snapshot
+itself changes only through a reviewed `refresh-statutes` commit. It installs `uv sync --locked --group ingest` and uses the
 checkout/setup-uv pins from CI, locked dependencies, read-only
 permissions, and disabled persisted checkout credentials. When the Anthropic
 secret exists **and** a manual run set the `llm_cleanup` input to `true`, it

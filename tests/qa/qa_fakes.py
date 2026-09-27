@@ -6,6 +6,7 @@ pipeline uses for sizing) so cost and ``max_cost_usd`` tests are meaningful.
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ from hoa_qa.answer.provider import (
     ProviderResult,
 )
 from hoa_qa.ask import QAAsker, QASettings, build_asker
-from hoa_qa.models import Corpus
+from hoa_qa.models import Authority, Chunk, Corpus, StatuteCompilation
 from hoa_qa.retrieval.jev import (
     NoulBatchResult,
     NoulQuestion,
@@ -161,3 +162,77 @@ def make_asker(
     corpus: Corpus, settings: QASettings, jev: FakeJev, provider: FakeProvider
 ) -> QAAsker:
     return build_asker(corpus, settings, jev=jev, provider=provider)
+
+
+STATUTE_MEETINGS = "(a) The board shall meet at least 4 times annually."
+BYLAWS_MEETINGS = (
+    "Regular meetings of the Board of Directors shall be held at least twice each year."
+)
+EXEMPTION = (
+    "(a) A common interest community association organized under the General "
+    "Not for Profit Corporation Act of 1986 and having either (i) 10 units or "
+    "less or (ii) annual budgeted assessments of $100,000 or less shall be "
+    "exempt from this Act unless the association affirmatively elects to be "
+    "covered by this Act by a majority of its directors or members."
+)
+HOMES = (
+    "The goal of this committee will be to bring new ideas and strategies on how "
+    "to successfully get the 67% (492 of 735 homes) vote needed to amend the "
+    "Declaration of CC&Rs."
+)
+DUES = "2026 Assessment Prices: $452 year or $113 per quarter"
+COMPILATION = StatuteCompilation(
+    through_public_act="104-433", updated_on=date(2025, 11, 21)
+)
+
+
+def with_statutes(corpus: Corpus) -> Corpus:
+    """The mini corpus plus two CICAA sections, a Bylaws clause that differs
+    from one of them, and the chunks the CICAA applicability note cites."""
+    bylaws = next(c for c in corpus.chunks if c.doc_id == "bylaws")
+    website = next(c for c in corpus.chunks if c.authority is Authority.website)
+    blog = next(c for c in corpus.chunks if c.authority is Authority.informal)
+
+    def statute(section: str, caption: str, text: str) -> Chunk:
+        label = f"765 ILCS 160/{section} ({caption})"
+        body = f"(765 ILCS 160/{section})\nSec. {section}. {caption}.\n{text}"
+        return Chunk(
+            id=f"cicaa-{section}",
+            doc_id="cicaa",
+            doc_title="Common Interest Community Association Act",
+            source_url="https://ftp.ilga.gov/ILCS/Ch%200765/Act%200160/"
+            f"076501600K{section}.html",
+            page_start=None,
+            page_end=None,
+            citation_label=label,
+            heading_path=("Common Interest Community Association Act (765 ILCS 160)",),
+            text_clean=body,
+            text_raw=body,
+            authority=Authority.statute,
+            effective_date=date(2024, 1, 1),
+            published_date=None,
+            superseded_by=None,
+            token_estimate=len(body) // 4,
+        )
+
+    def copy(chunk: Chunk, chunk_id: str, text: str, **update: object) -> Chunk:
+        return chunk.model_copy(
+            update={"id": chunk_id, "text_clean": text, "text_raw": text, **update}
+        )
+
+    extra = (
+        statute("1-30", "Board duties and obligations; records", STATUTE_MEETINGS),
+        statute("1-75", "Exemptions for small common interest communities", EXEMPTION),
+        copy(bylaws, "bylaws-5.1", BYLAWS_MEETINGS, citation_label="Bylaws, §5.1"),
+        copy(blog, "amendments-committee-intro", HOMES),
+        copy(website, "home-1", DUES),
+    )
+    hashes = {**corpus.manifest.source_hashes, "cicaa": "0" * 64}
+    manifest = corpus.manifest.model_copy(
+        update={
+            "chunk_count": len(corpus.chunks) + len(extra),
+            "source_hashes": hashes,
+            "statute_compilation": COMPILATION,
+        }
+    )
+    return Corpus(manifest=manifest, chunks=(*corpus.chunks, *extra))

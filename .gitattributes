@@ -1,0 +1,2 @@
+# ILGA statute snapshot: bytes are hash-checked, never normalize line endings.
+statutes/** -text

@@ -85,7 +85,8 @@ def test_optional_pages(
 
 def test_authority_order() -> None:
     assert (
-        authority_rank(Authority.governing)
+        authority_rank(Authority.statute)
+        > authority_rank(Authority.governing)
         > authority_rank(Authority.rules)
         > authority_rank(Authority.board_decision)
         > authority_rank(Authority.website)

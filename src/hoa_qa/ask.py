@@ -38,6 +38,12 @@ from hoa_qa.answer.provider import (
     AnthropicAnswerProvider,
     DraftClaim,
 )
+from hoa_qa.answer.statute_notes import (
+    ApplicabilityNote,
+    applicability_note,
+    cites_cicaa,
+    statute_disclaimer,
+)
 from hoa_qa.models import (
     Answer,
     Authority,
@@ -105,9 +111,15 @@ OMITTED_NOTE = (
 # authoritative passage, a low-authority-only answer claim may stand, unless
 # it presents itself as current.
 # `website` (the Board-run site, including the FAQ and the dues banner) and
-# `form` are official HOA publications and are not LOW_AUTHORITY.
+# `form` are official HOA publications and are not LOW_AUTHORITY. `statute`
+# (Illinois law) is authoritative too: an informal post can't answer next to it.
 AUTHORITATIVE = frozenset(
-    {Authority.governing, Authority.rules, Authority.board_decision}
+    {
+        Authority.statute,
+        Authority.governing,
+        Authority.rules,
+        Authority.board_decision,
+    }
 )
 LOW_AUTHORITY = frozenset({Authority.informal, Authority.superseded})
 _PRESENTS_AS_CURRENT = re.compile(
@@ -126,6 +138,17 @@ _NEGATED_BEFORE = re.compile(
 _OUTDATED_AFTER = re.compile(
     r"^\s*(\w+\s+)?(superseded|outdated|obsolete|replaced|repealed|expired|"
     r"out of date|no longer)\b",
+    re.IGNORECASE,
+)
+
+# Statute-backed claims state what the law says ("765 ILCS 160/1-30 states
+# that ..."), never the reader's rights or what applies in their case, and
+# never that the Association is breaking the law (addendum §6.3).
+_ADVICE = re.compile(
+    r"\byou(?:'ve| have| has)? (?:a |the )?rights?\b|\byour (?:legal )?rights?\b|"
+    r"\byou(?:'re| are) (?:legally )?entitled\b|\bin your (?:case|situation)\b|"
+    r"\b(?:is|are|was|were) (?:violating|breaking|in violation of)\b|"
+    r"\bbreaking the law\b",
     re.IGNORECASE,
 )
 
@@ -246,6 +269,19 @@ class _Verified:
 _AUTHORITY_REASONS = frozenset({"low_authority", "informal_as_current"})
 
 
+def gives_advice(statement: str) -> bool:
+    """True if a statement tells the reader their rights or legal position."""
+    return _ADVICE.search(statement) is not None
+
+
+def _advice_screen(
+    claim: DraftClaim, citations: tuple[CheckedCitation, ...]
+) -> str | None:
+    """A statute-backed claim must say what the statute states, not advise."""
+    statute = any(c.chunk.authority is Authority.statute for c in citations)
+    return "advice_phrasing" if statute and gives_advice(claim.statement) else None
+
+
 def _authority_screen(
     claim: DraftClaim,
     citations: tuple[CheckedCitation, ...],
@@ -353,6 +389,16 @@ class QAAsker:
         self._max_cost_usd = max_cost_usd(
             self._plan.passages, settings, provider.model, provider.max_tokens
         )
+        # Checked up front: a corpus with CICAA but stale evidence fails here.
+        self._applicability: ApplicabilityNote | None = (
+            applicability_note(corpus.chunks) if cites_cicaa(corpus.chunks) else None
+        )
+        self._statute_disclaimer: str | None = None
+        if any(chunk.authority is Authority.statute for chunk in corpus.chunks):
+            compiled = corpus.manifest.statute_compilation
+            if compiled is None:
+                raise ValueError("corpus has statutes but no statute_compilation")
+            self._statute_disclaimer = statute_disclaimer(compiled)
 
     @property
     def max_cost_usd(self) -> float:
@@ -517,6 +563,12 @@ class QAAsker:
             _authority_screen(claim, cites, authoritative=authoritative)
             for claim, cites in zip(draft.claims, checked, strict=True)
         ]
+        for index, (claim, (usable, _)) in enumerate(
+            zip(draft.claims, screened, strict=True)
+        ):
+            advice = _advice_screen(claim, usable)
+            if advice is not None:
+                screened[index] = ((), advice)
         evidence = [
             ClaimEvidence(statement=claim.statement, citations=usable)
             for claim, (usable, _) in zip(draft.claims, screened, strict=True)
@@ -574,15 +626,26 @@ class QAAsker:
             parts.append(OMITTED_NOTE)
         if draft.refer_to_board:
             parts.append(BOARD_REFERRAL)
+        cited = [checked.chunk for v in kept for checked in v.citations]
+        notes: list[Citation] = []
+        if self._statute_disclaimer is not None and any(
+            chunk.authority is Authority.statute for chunk in cited
+        ):
+            parts.append(self._statute_disclaimer)
+            if self._applicability is not None and cites_cicaa(cited):
+                parts.append(self._applicability.text)
+                notes += self._applicability.citations
         conflicts = tuple(v.statement.strip() for v in kept if v.kind == "conflict")
         citations: list[Citation] = []
         seen: set[tuple[str, str]] = set()
-        for v in kept:
-            for checked in v.citations:
-                key = (checked.chunk.id, normalize(checked.quote))
-                if key not in seen:
-                    seen.add(key)
-                    citations.append(_citation(checked))
+        for citation in [
+            *(_citation(checked) for v in kept for checked in v.citations),
+            *notes,
+        ]:
+            key = (citation.chunk_id, normalize(citation.quote))
+            if key not in seen:
+                seen.add(key)
+                citations.append(citation)
         return (
             Outcome.answered,
             " ".join(parts),

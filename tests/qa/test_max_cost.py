@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from pydantic_core import to_json
-from qa_fakes import FIXTURE
+from qa_fakes import FIXTURE, with_statutes
 
 from hoa_qa.answer.prompt import AnswerPrompt
 from hoa_qa.answer.provider import (
@@ -191,6 +191,8 @@ def boundary_corpus() -> Corpus:
 
 CORPORA = {
     "mini": lambda: load_corpus(FIXTURE),
+    # Statute answers add code-written notes and citations, never spend.
+    "statutes": lambda: with_statutes(load_corpus(FIXTURE)),
     "synthetic-74k": synthetic_74k,
     "boundaries": boundary_corpus,
 }

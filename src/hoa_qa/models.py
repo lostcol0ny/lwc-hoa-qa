@@ -55,6 +55,7 @@ class Model(BaseModel):
 
 
 class Authority(StrEnum):
+    statute = "statute"
     governing = "governing"
     rules = "rules"
     board_decision = "board_decision"
@@ -65,8 +66,9 @@ class Authority(StrEnum):
 
 
 def authority_rank(a: Authority) -> int:
-    """Return 0 (superseded) through 5 (governing), with form/informal tied."""
+    """Return 0 (superseded) through 6 (statute), with form/informal tied."""
     return {
+        Authority.statute: 6,
         Authority.governing: 5,
         Authority.rules: 4,
         Authority.board_decision: 3,
@@ -136,11 +138,24 @@ def citation_url(chunk: Chunk) -> str:
     return chunk.source_url
 
 
+class StatuteCompilation(Model):
+    """How current the ingested statute text is, as ILGA states it.
+
+    ILGA's file repository says which Public Acts its copy includes; the
+    statute disclaimer quotes it so a reader knows the text's currency.
+    """
+
+    through_public_act: str = Field(pattern=r"^\d+-\d+$")
+    updated_on: Annotated[date, BeforeValidator(validate_date)]
+
+
 class CorpusManifest(Model):
     build_time: AwareDatetime
     source_hashes: dict[str, str]
     chunk_count: int = Field(ge=0, strict=True)
     ocr_fallbacks: tuple[str, ...]
+    # Set when the corpus has statutes (older corpora have none).
+    statute_compilation: StatuteCompilation | None = None
 
 
 class Corpus(Model):
