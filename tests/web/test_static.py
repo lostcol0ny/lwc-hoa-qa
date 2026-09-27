@@ -72,3 +72,23 @@ def test_vercel_json_bundles_corpus_into_entrypoint() -> None:
 def test_vercel_entrypoint_exports_app() -> None:
     source = (ROOT / "api" / "index.py").read_text()
     assert "from hoa_qa.web.app import app" in source
+
+
+def test_progress_status_is_a_separate_polite_region() -> None:
+    # Loading status is announced from its own live region, outside the answer
+    # region (which is aria-busy while a request is in flight).
+    html = (PUBLIC / "index.html").read_text()
+    status = re.search(r'<p id="progress-status"[^>]*>', html)
+    assert status
+    assert 'role="status"' in status.group(0)
+    assert 'aria-live="polite"' in status.group(0)
+    assert html.index('id="progress-status"') < html.index('id="answer"')
+
+
+def test_progress_lines_are_visual_only_and_respect_reduced_motion() -> None:
+    source = (PUBLIC / "app.js").read_text()
+    assert 'loading.setAttribute("aria-hidden", "true")' in source
+    assert "setInterval" not in source  # one timer per stage boundary, cleared on stop
+    css = (PUBLIC / "styles.css").read_text()
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)") :]
+    assert re.search(r"\.progress-line\s*\{\s*animation:\s*none", reduced)
