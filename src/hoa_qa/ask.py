@@ -105,9 +105,15 @@ OMITTED_NOTE = (
 # authoritative passage, a low-authority-only answer claim may stand, unless
 # it presents itself as current.
 # `website` (the Board-run site, including the FAQ and the dues banner) and
-# `form` are official HOA publications and are not LOW_AUTHORITY.
+# `form` are official HOA publications and are not LOW_AUTHORITY. `statute`
+# (Illinois law) is authoritative too: an informal post can't answer next to it.
 AUTHORITATIVE = frozenset(
-    {Authority.governing, Authority.rules, Authority.board_decision}
+    {
+        Authority.statute,
+        Authority.governing,
+        Authority.rules,
+        Authority.board_decision,
+    }
 )
 LOW_AUTHORITY = frozenset({Authority.informal, Authority.superseded})
 _PRESENTS_AS_CURRENT = re.compile(

@@ -18,7 +18,8 @@ MAX_CITATIONS_PER_CLAIM = 3
 MAX_STATEMENT_CHARS = 400
 
 AUTHORITY_ORDER = (
-    "governing > rules > board_decision > website > form = informal > superseded"
+    "statute > governing > rules > board_decision > website > form = informal "
+    "> superseded"
 )
 
 SYSTEM_PROMPT = f"""\
@@ -40,18 +41,23 @@ Source authority (highest first): {AUTHORITY_ORDER}.
 Articles of Incorporation > Bylaws.
 - Within the same authority level, the passage with the newer \
 effective_date wins.
-- When passages disagree, give the answer from the highest-authority, newest \
-source, and REPORT the disagreement as a claim of kind "conflict" (for \
+- When HOA passages disagree, give the answer from the highest-authority, \
+newest source, and REPORT the disagreement as a claim of kind "conflict" (for \
 example: an old newsletter gives different allowed mailbox styles than the \
 current rules). Never silently pick one.
+- `statute` passages quote Illinois law. When a statute passage and an HOA \
+document say different things, do not pick one: give what each says as its \
+own "answer" claim, and add a "conflict" claim, citing both, that says only \
+that they differ. Never say which one controls, and never say or imply that \
+the Association is breaking the law.
 - Label informal sources (newsletters, blog posts) as informal, and \
 superseded sources as superseded/no longer in effect, whenever you mention \
 them. Never describe what an informal or superseded source says as the \
 current rule.
-- When a governing, rules, or board_decision passage covers the question, \
-"answer" claims must cite it: an answer claim that cites only informal or \
-superseded passages is rejected by the app. Mention the informal or \
-superseded version, if at all, only in a "conflict" claim.
+- When a statute, governing, rules, or board_decision passage covers the \
+question, "answer" claims must cite it: an answer claim that cites only \
+informal or superseded passages is rejected by the app. Mention the informal \
+or superseded version, if at all, only in a "conflict" claim.
 - A series of changes over time (for example a lawn-watering schedule the \
 Board revised several times) is history, not a conflict: give the current figure \
 and, if useful, the history.
@@ -82,8 +88,9 @@ do not say: no exceptions, exemptions, advice, or guesses of your own.
 disagreement between sources. A conflict claim states only what the other \
 source says, naming it as informal or superseded (for example: "An \
 informal newsletter lists different allowed mailbox styles."), never as \
-current; the app shows it as a noted conflict, so do not add your own \
-conclusion about it.
+current, or, for a statute and an HOA document, only that the two differ; \
+the app shows it as a noted conflict, so do not add your own conclusion \
+about it.
 - essential: true if the answer would be wrong or misleading without this \
 answer claim; false for helpful context and for conflict claims.
 - Claims state what the passages say. Do not add commentary about the \
@@ -118,9 +125,9 @@ def rejected(statement: str, reason: str) -> str:
 
 AUTHORITY_FEEDBACK = (
     "Some rejected claims cited only informal or superseded passages although "
-    "governing, rules, or board_decision passages were provided. Answer from "
-    "those higher-authority passages; report an informal or superseded source "
-    'only as a "conflict" claim.'
+    "statute, governing, rules, or board_decision passages were provided. "
+    "Answer from those higher-authority passages; report an informal or "
+    'superseded source only as a "conflict" claim.'
 )
 
 RETRY_FEEDBACK = (

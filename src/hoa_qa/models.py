@@ -55,6 +55,7 @@ class Model(BaseModel):
 
 
 class Authority(StrEnum):
+    statute = "statute"
     governing = "governing"
     rules = "rules"
     board_decision = "board_decision"
@@ -65,8 +66,9 @@ class Authority(StrEnum):
 
 
 def authority_rank(a: Authority) -> int:
-    """Return 0 (superseded) through 5 (governing), with form/informal tied."""
+    """Return 0 (superseded) through 6 (statute), with form/informal tied."""
     return {
+        Authority.statute: 6,
         Authority.governing: 5,
         Authority.rules: 4,
         Authority.board_decision: 3,

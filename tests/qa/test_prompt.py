@@ -7,8 +7,8 @@ from hoa_qa.models import Corpus
 def test_system_prompt_policy() -> None:
     text = " ".join(SYSTEM_PROMPT.split())
     assert (
-        "governing > rules > board_decision > website > form = informal > superseded"
-        in text
+        "statute > governing > rules > board_decision > website > form = informal "
+        "> superseded" in text
     )
     assert "newer effective_date wins" in text
     assert "Declaration > Articles of Incorporation > Bylaws" in text
