@@ -223,8 +223,8 @@ Do these in order.
 ### Day-2 operations
 
 Vercel reads environment variables when a deployment is built, so after
-changing one, **redeploy**: push to `main`, or open the latest **Deploy** run on
-`main` in Actions and choose **Re-run all jobs**.
+changing one, **redeploy**: push to `main`, or open the latest
+**push-triggered Deploy** run on `main` in Actions and choose **Re-run all jobs**.
 
 **Rotate a key.** Create the new key at the provider (Anthropic console,
 TypeSafe, Upstash, Vercel account tokens). Update it everywhere it's used:
@@ -253,11 +253,14 @@ variable (the two API keys, `UPSTASH_REDIS_REST_TOKEN` or its fallback
   never `DEL`. Raising `MONTHLY_BUDGET_USD` is almost always the better fix.
 
 **Refresh the corpus.** **Build corpus** runs monthly (06:17 UTC on the 1st),
-on pushes to `main` that touch `sources.yaml` or the ingest code, and by hand.
-Deploy doesn't run when a new corpus is built. It bundles the latest successful
-`corpus` artifact from `main` each time it runs, so trigger a deploy afterwards
-(push, or re-run the latest Deploy run as above) and check `chunk_count` and
-`corpus_build_time` on `/api/health`. The artifact is kept for 90 days, and
+on pushes to `main` that touch `sources.yaml`, `src/hoa_qa/ingest/**`,
+`statutes/**`, or `.github/workflows/build-corpus.yml`, and by hand.
+A merge touching those paths starts a build, then a successful build on
+`main` automatically redeploys production with that run's artifact (or a newer
+successful build's artifact if superseded) and current `main` code. Monthly
+and manual builds on `main` now reach production too;
+no manual Deploy re-run is needed. Check `chunk_count` and `corpus_build_time`
+on `/api/health`. The artifact is kept for 90 days, and
 the monthly run keeps a fresh one around. If Deploy says the artifact expired,
 run **Build corpus** first. When chunk ids change, refresh
 `evals/corpus_ids.txt` (`hoa-qa eval --write-ids --corpus build/corpus.json`).
@@ -283,7 +286,8 @@ so there is time, but not unlimited time. To refresh:
    (`hoa-qa eval --write-ids --corpus build/corpus.json`); update golden ids
    if a statute section's parts changed.
 4. Commit via a PR, run the **Eval** workflow on the branch
-   (`corpus=build`), merge, then deploy as above.
+   (`corpus=build`), then merge. Changes under `statutes/` trigger a corpus
+   rebuild and automatic production redeploy after it succeeds.
 
 **If something goes wrong** (bad answers, a spend spike, abuse), take the bot
 offline, fastest first:

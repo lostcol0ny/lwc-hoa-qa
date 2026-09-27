@@ -94,3 +94,108 @@ def test_eval_workflow_is_manual_and_skips_without_secrets() -> None:
     assert "--no-llm" in build["run"]
     uploads = [s for s in steps if s.get("uses", "").startswith("actions/upload-")]
     assert uploads and "eval-results.json" in uploads[0]["with"]["path"]
+
+
+def test_deploy_corpus_trigger_and_production_security() -> None:
+    workflow = load_workflow("deploy.yml")
+    assert workflow[True]["workflow_run"] == {
+        "workflows": ["Build corpus"],
+        "types": ["completed"],
+        "branches": ["main"],
+    }
+    job = workflow["jobs"]["deploy"]
+    assert job["if"] == (
+        "github.event_name != 'workflow_run' || "
+        "(github.event.workflow_run.conclusion == 'success' && "
+        "github.event.workflow_run.event != 'pull_request' && "
+        "github.event.workflow_run.head_repository.full_name == github.repository)"
+    )
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    assert job["env"]["VERCEL_TARGET"] == (
+        "${{ (github.event_name == 'push' || github.event_name == 'workflow_run') "
+        "&& 'production' || 'preview' }}"
+    )
+    (checkout,) = [
+        s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert checkout["with"]["ref"] == (
+        "${{ github.event_name == 'pull_request' && github.ref || 'main' }}"
+    )
+    assert "workflow_run.head_sha" not in str(workflow)
+    assert "workflow_run.head_branch" not in str(workflow)
+    selection_index = next(
+        i for i, s in enumerate(job["steps"]) if s.get("id") == "corpus"
+    )
+    selection = job["steps"][selection_index]
+    assert selection["env"]["TRIGGER_RUN_ID"] == "${{ github.event.workflow_run.id }}"
+    assert "--branch main --status success" in selection["run"]
+    for step in job["steps"][selection_index + 1 :]:
+        assert step["if"] == "steps.corpus.outputs.run_id != ''"
+    (download,) = [s for s in job["steps"] if "gh run download" in s.get("run", "")]
+    assert download["env"]["run_id"] == "${{ steps.corpus.outputs.run_id }}"
+    assert 'gh run download "$run_id"' in download["run"]
+
+
+@pytest.mark.parametrize(
+    ("event", "trigger", "latest", "expected"),
+    [
+        ("workflow_run", "20", "20", "run_id=20\n"),
+        ("workflow_run", "19", "20", "run_id=20\n"),
+        ("workflow_run", "21", "20", "run_id=21\n"),
+        ("push", "", "20", "run_id=20\n"),
+        ("pull_request", "", "20", "run_id=20\n"),
+    ],
+)
+def test_deploy_corpus_selection(
+    tmp_path: Path, event: str, trigger: str, latest: str, expected: str
+) -> None:
+    import os
+    import subprocess
+
+    steps = load_workflow("deploy.yml")["jobs"]["deploy"]["steps"]
+    selection = next(s for s in steps if s.get("id") == "corpus")
+    gh = tmp_path / "gh"
+    gh.write_text('#!/bin/sh\nprintf "%s\\n" "$TEST_LATEST"\n')
+    gh.chmod(0o755)
+    output = tmp_path / "output"
+    summary = tmp_path / "summary"
+    output.touch()
+    subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", selection["run"]],
+        check=True,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_EVENT_NAME": event,
+            "GITHUB_REPOSITORY": "test/repo",
+            "TRIGGER_RUN_ID": trigger,
+            "TEST_LATEST": latest,
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+        },
+    )
+    assert output.read_text() == expected
+    if event == "workflow_run" and int(trigger) < int(latest):
+        assert "Corpus superseded" in summary.read_text()
+
+
+def test_deploy_concurrency_allowlist_and_noop_isolation() -> None:
+    concurrency = load_workflow("deploy.yml")["concurrency"]
+    assert concurrency == {
+        "group": (
+            "${{ (github.event_name == 'push' || "
+            "(github.event_name == 'workflow_run' && "
+            "github.event.workflow_run.conclusion == 'success' && "
+            "github.event.workflow_run.event != 'pull_request' && "
+            "github.event.workflow_run.head_repository.full_name == "
+            "github.repository)) "
+            "&& 'deploy-production' || github.event_name == 'pull_request' && "
+            "format('deploy-pull_request-{0}', github.ref) || "
+            "format('deploy-noop-{0}', github.run_id) }}"
+        ),
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
+
+
+def test_statute_refresh_triggers_corpus_build() -> None:
+    assert "statutes/**" in load_workflow("build-corpus.yml")[True]["push"]["paths"]
