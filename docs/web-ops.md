@@ -47,21 +47,22 @@ HOA_QA_FAKE_ASKER=1 CORPUS_PATH=tests/fixtures/mini_corpus.json \
 | Route | Result |
 |---|---|
 | `POST /api/ask` `{"question": "..."}` | An `Answer` JSON (`hoa_qa.models.Answer`) |
-| `GET /api/health` | `{"status": "ok", "corpus_build_time", "chunk_count", "documents_url", "budget_config"}`, or 503 `{"status": "unavailable"}` if the corpus is missing or invalid |
+| `GET /api/health` | `{"status": "ok", "corpus_build_time", "chunk_count", "documents_url", "budget_config", "budget_config_missing"}`, or 503 `{"status": "unavailable"}` if the corpus is missing or invalid |
 | `GET /documents` | 307 redirect to `HOA_DOCUMENTS_URL` (re-checked: https, no userinfo; else the default). The page's documents links point here so they work without JS |
 
 `budget_config` reports the spend cap and Redis configuration health:
 - In production, if Redis credentials are half-configured (an incomplete pair),
-  it reports `"redis_config_incomplete: missing <VAR>"` naming the missing
-  variable(s). If neither pair is configured, it reports `"redis_not_configured"`.
+  it reports `"redis_config_incomplete"` and lists the missing variable(s) in
+  `budget_config_missing`. If neither pair is configured, it reports
+  `"redis_not_configured"` (with `budget_config_missing` empty).
   Health reports never leak secrets or URLs.
 - When Redis is operational (or in dev where in-memory stores are allowed),
   it reports `"budget_below_reservation"` if `MONTHLY_BUDGET_USD < R` (meaning
   every question will get `budget_exhausted`), or `"ok"`.
-It reveals neither budget nor token amounts. Until the first question builds
-the asker, R is the env default `BUDGET_RESERVE_PER_REQUEST_USD`; afterwards it
-includes the asker's `max_cost_usd`. The same condition is logged as a WARNING
-at startup (env default R) and once more on the first question (real R).
+It reveals neither amount. Until the first question builds the asker, R is the
+env default `BUDGET_RESERVE_PER_REQUEST_USD`; afterwards it includes the
+asker's `max_cost_usd`. The same condition is logged as a WARNING at startup
+(env default R) and once more on the first question (real R).
 
 Every `/api/ask` response body is `Answer`-shaped, so the page renders them all
 the same way:
@@ -174,7 +175,8 @@ questions early but never spends past the cap.
 
 Consequences:
 - If `MONTHLY_BUDGET_USD < R`, nothing is admitted; `/api/health` reports
-  `"budget_config": "budget_below_reservation"` and a WARNING is logged.
+  `"budget_config": "budget_below_reservation"` only when there is no Redis
+  config error, and a WARNING is logged.
 - Near the cap, questions are refused while `spend + R > B`, even if the real
   cost would have fit. That margin (at most R) goes unused.
 - Provider-side spend limits (Anthropic console, TypeSafe if offered) remain a

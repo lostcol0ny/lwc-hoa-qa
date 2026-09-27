@@ -27,7 +27,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -387,9 +387,9 @@ KV_TOKEN_VAR = "KV_REST_API_TOKEN"
 class RedisConfigResult:
     """Result of resolving Redis credentials as matched pairs."""
 
-    credentials: tuple[str, str] | None
-    missing_variables: tuple[str, ...]
-    incomplete: bool
+    credentials: tuple[str, str] | None = field(default=None, repr=False)
+    missing_variables: tuple[str, ...] = ()
+    incomplete: bool = False
     family: str | None = None
 
 
@@ -481,8 +481,6 @@ def is_production(env: Mapping[str, str]) -> bool:
 def check_redis_config(
     env: Mapping[str, str],
     log: logging.Logger | None = None,
-    *,
-    production: bool | None = None,
 ) -> None:
     """Log Redis configuration status on startup.
 
@@ -492,7 +490,7 @@ def check_redis_config(
     """
     log = log or logger
     redis = resolve_redis_config(env)
-    is_prod = is_production(env) if production is None else production
+    is_prod = is_production(env)
     if redis.incomplete:
         missing_str = ", ".join(redis.missing_variables)
         if is_prod:
@@ -520,12 +518,9 @@ def select_counter_store(env: Mapping[str, str]) -> CounterStore:
 def select_budget_store(
     env: Mapping[str, str],
     counters: CounterStore | None = None,
-    *,
-    production: bool | None = None,
 ) -> BudgetStore:
     """Upstash when configured; in-memory in dev; fail closed in production."""
     redis = resolve_redis_config(env)
-    is_prod = is_production(env) if production is None else production
-    if is_prod and (redis.credentials is None or redis.incomplete):
+    if is_production(env) and (redis.credentials is None or redis.incomplete):
         return FailClosedBudgetStore()
     return CounterBudgetStore(counters or select_counter_store(env))

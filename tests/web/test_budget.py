@@ -471,6 +471,19 @@ REDIS_PAIRING_CASES = [
         id="kv_complete_with_read_only_token_ignored",
     ),
     pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://upstash.example",
+            "UPSTASH_REDIS_REST_TOKEN": "   ",
+            "KV_REST_API_URL": "https://kv.example",
+            "KV_REST_API_TOKEN": "k-tok",
+        },
+        None,
+        ("UPSTASH_REDIS_REST_TOKEN",),
+        True,
+        None,
+        id="upstash_url_with_whitespace_token_and_complete_kv_pair_error",
+    ),
+    pytest.param(
         {},
         None,
         (),
@@ -505,6 +518,15 @@ def test_redis_credential_pairing_resolution(
     assert result.family == expected_family
     assert upstash_config(env) == expected_creds
 
+    # B1: Assert no URL or token value appears in repr() or str()
+    repr_str = repr(result)
+    str_str = str(result)
+    for val in env.values():
+        clean_val = val.strip()
+        if clean_val:
+            assert clean_val not in repr_str
+            assert clean_val not in str_str
+
 
 @pytest.mark.parametrize(
     (
@@ -525,7 +547,7 @@ def test_redis_store_selection_production_vs_development(
 ) -> None:
     # Development behavior: in-memory store is allowed even on incomplete configs
     dev_counters = select_counter_store(env)
-    dev_budget = select_budget_store(env, dev_counters, production=False)
+    dev_budget = select_budget_store(env, dev_counters)
     if expected_creds is not None:
         assert isinstance(dev_counters, UpstashCounterStore)
         asyncio.run(dev_counters.aclose())
@@ -536,7 +558,7 @@ def test_redis_store_selection_production_vs_development(
     # Production behavior: incomplete pair or unconfigured fails closed
     prod_env = {**env, "VERCEL_ENV": "production"}
     prod_counters = select_counter_store(prod_env)
-    prod_budget = select_budget_store(prod_env, prod_counters, production=True)
+    prod_budget = select_budget_store(prod_env, prod_counters)
     if expected_creds is not None and not expected_incomplete:
         assert isinstance(prod_counters, UpstashCounterStore)
         assert isinstance(prod_budget, CounterBudgetStore)

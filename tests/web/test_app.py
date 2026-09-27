@@ -124,6 +124,7 @@ def test_health_reports_corpus_and_leaks_no_env(
         "chunk_count": 8,
         "documents_url": "https://lakewoodcreekhoa.com/",
         "budget_config": "ok",
+        "budget_config_missing": [],
     }
     for value in os.environ.values():
         if len(value) >= 8:
@@ -268,14 +269,14 @@ APP_PAIRING_CASES = [
         },
         ("KV_REST_API_URL", "UPSTASH_REDIS_REST_TOKEN"),
         True,
-        "redis_config_incomplete: missing KV_REST_API_URL, UPSTASH_REDIS_REST_TOKEN",
+        "redis_config_incomplete",
         id="upstash_url_and_kv_token_mixed_error",
     ),
     pytest.param(
         {"KV_REST_API_URL": "https://secret-kv.example.com"},
         ("KV_REST_API_TOKEN",),
         True,
-        "redis_config_incomplete: missing KV_REST_API_TOKEN",
+        "redis_config_incomplete",
         id="kv_url_only_error",
     ),
     pytest.param(
@@ -286,7 +287,7 @@ APP_PAIRING_CASES = [
         },
         ("UPSTASH_REDIS_REST_URL",),
         True,
-        "redis_config_incomplete: missing UPSTASH_REDIS_REST_URL",
+        "redis_config_incomplete",
         id="upstash_token_only_with_complete_kv_pair_error",
     ),
     pytest.param(
@@ -303,7 +304,7 @@ APP_PAIRING_CASES = [
         },
         ("KV_REST_API_TOKEN",),
         True,
-        "redis_config_incomplete: missing KV_REST_API_TOKEN",
+        "redis_config_incomplete",
         id="kv_url_with_read_only_token_error",
     ),
     pytest.param(
@@ -327,6 +328,18 @@ APP_PAIRING_CASES = [
         False,
         "ok",
         id="kv_complete_with_read_only_token_ignored",
+    ),
+    pytest.param(
+        {
+            "UPSTASH_REDIS_REST_URL": "https://secret-upstash.example.com",
+            "UPSTASH_REDIS_REST_TOKEN": "   ",
+            "KV_REST_API_URL": "https://secret-kv.example.com",
+            "KV_REST_API_TOKEN": "secret-kv-token-67890",
+        },
+        ("UPSTASH_REDIS_REST_TOKEN",),
+        True,
+        "redis_config_incomplete",
+        id="upstash_url_with_whitespace_token_and_complete_kv_pair_error",
     ),
     pytest.param(
         {},
@@ -367,16 +380,21 @@ def test_redis_pairing_startup_health_and_ask_behavior(
     assert health_resp.status_code == 200
     health_body = health_resp.json()
     assert health_body["budget_config"] == expected_prod_health
+    assert health_body["budget_config_missing"] == list(missing_vars)
 
-    # Health reason text and logs must name missing variables when incomplete
+    # Health missing field and logs must name missing variables when incomplete
     for var in missing_vars:
-        assert var in health_body["budget_config"]
+        assert var in health_body["budget_config_missing"]
         assert var in caplog.text
 
     # MUST NEVER LEAK SECRETS OR URLS IN HEALTH OR LOGS
     for key, val in redis_env.items():
-        assert val not in health_resp.text, f"Secret {key} leaked in /api/health"
-        assert val not in caplog.text, f"Secret {key} leaked in logs"
+        clean_val = val.strip()
+        if clean_val:
+            assert clean_val not in health_resp.text, (
+                f"Secret {key} leaked in /api/health"
+            )
+            assert clean_val not in caplog.text, f"Secret {key} leaked in logs"
 
     if is_error or expected_prod_health == "redis_not_configured":
         ask_resp = client.post("/api/ask", json={"question": QUESTION})
@@ -408,10 +426,15 @@ def test_redis_pairing_startup_health_and_ask_behavior(
 
     assert dev_health.status_code == 200
     assert dev_health.json()["budget_config"] == "ok"
+    assert dev_health.json()["budget_config_missing"] == []
 
     for key, val in redis_env.items():
-        assert val not in dev_health.text, f"Secret {key} leaked in dev health"
-        assert val not in caplog.text, f"Secret {key} leaked in dev logs"
+        clean_val = val.strip()
+        if clean_val:
+            assert clean_val not in dev_health.text, (
+                f"Secret {key} leaked in dev health"
+            )
+            assert clean_val not in caplog.text, f"Secret {key} leaked in dev logs"
 
     if is_error:
         # In dev, incomplete pair logs a warning but allows in-memory counter store

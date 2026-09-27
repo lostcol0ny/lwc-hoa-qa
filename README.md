@@ -125,8 +125,7 @@ default".
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | QA core, web | Link in refusals, not-found and budget pages; must be `https://` |
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | web | Hard monthly spend cap (UTC calendar month) |
 | `BUDGET_RESERVE_PER_REQUEST_USD` | `0.05` | web | Minimum per-question reservation R |
-| `UPSTASH_REDIS_REST_URL` | unset | web | Shared counters; takes precedence over `KV_REST_API_URL` |
-| `UPSTASH_REDIS_REST_TOKEN` | unset | web | Read-write REST token; takes precedence over `KV_REST_API_TOKEN` |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | web | Shared counters; resolved as a pair, taking precedence over the `KV_*` fallback pair |
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | web | Marketplace fallback credentials; URL and writable token **required in production** (otherwise budget fails closed). `KV_REST_API_READ_ONLY_TOKEN` is never used |
 | `RATE_LIMIT_PER_HOUR` | `10` | web | Per-IP questions per hour |
 | `RATE_LIMIT_PER_DAY` | `50` | web | Per-IP questions per day |

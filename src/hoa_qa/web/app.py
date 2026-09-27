@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -28,6 +28,7 @@ from hoa_qa.budget import (
     CounterStore,
     Reservation,
     check_redis_config,
+    is_production,
     resolve_redis_config,
     select_budget_store,
     select_counter_store,
@@ -122,12 +123,10 @@ def create_app(
     env = os.environ if env is None else env
     configure_logging()
     check_sdk_debug_logging(env)
+    check_redis_config(env, log=logger)
     config = settings or WebSettings.from_env(env)
-    check_redis_config(env, log=logger, production=config.production)
     counter_store = counters or select_counter_store(env)
-    budget = budget_store or select_budget_store(
-        env, counter_store, production=config.production
-    )
+    budget = budget_store or select_budget_store(env, counter_store)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -276,6 +275,7 @@ def create_app(
                 {"status": "unavailable", "documents_url": settings.documents_url},
                 status_code=503,
             )
+        app_env = getattr(request.app.state, "env", None)
         return JSONResponse(
             {
                 "status": "ok",
@@ -286,8 +286,9 @@ def create_app(
                 "budget_config": budget_config(
                     settings,
                     getattr(request.app.state, "asker", None),
-                    env=getattr(request.app.state, "env", None),
+                    env=app_env,
                 ),
+                "budget_config_missing": budget_config_missing(app_env),
             }
         )
 
@@ -332,7 +333,12 @@ def reservation_amount(settings: WebSettings, asker: object) -> float:
     return max(reserve, declared)
 
 
-BudgetConfig = str
+BudgetConfig = Literal[
+    "ok",
+    "budget_below_reservation",
+    "redis_config_incomplete",
+    "redis_not_configured",
+]
 
 
 def budget_config(
@@ -342,24 +348,33 @@ def budget_config(
 ) -> BudgetConfig:
     """Check budget and Redis configuration status for /api/health.
 
-    In production, a Redis configuration error (incomplete pair) or missing
-    Redis configuration reports a specific reason (such as
-    ``redis_config_incomplete: missing <VAR>`` or ``redis_not_configured``)
-    without leaking secrets or URLs.
+    In production, reports a specific reason for an incomplete Redis pair
+    (``redis_config_incomplete``) or missing Redis (``redis_not_configured``).
     When configured, reports ``budget_below_reservation`` if
     MONTHLY_BUDGET_USD < R, or ``ok``.
     """
-    if settings.production:
-        env_map = os.environ if env is None else env
+    env_map = os.environ if env is None else env
+    if is_production(env_map):
         redis = resolve_redis_config(env_map)
         if redis.incomplete:
-            missing_str = ", ".join(redis.missing_variables)
-            return f"redis_config_incomplete: missing {missing_str}"
+            return "redis_config_incomplete"
         if redis.credentials is None:
             return "redis_not_configured"
     if settings.monthly_budget_usd < reservation_amount(settings, asker):
         return "budget_below_reservation"
     return "ok"
+
+
+def budget_config_missing(
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return missing Redis variable names if Redis is incomplete in production."""
+    env_map = os.environ if env is None else env
+    if is_production(env_map):
+        redis = resolve_redis_config(env_map)
+        if redis.incomplete:
+            return list(redis.missing_variables)
+    return []
 
 
 def warn_if_budget_below_reservation(settings: WebSettings, asker: object) -> None:
