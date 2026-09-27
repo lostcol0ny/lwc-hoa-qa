@@ -424,16 +424,16 @@ class QAAsker:
             draft = generated.draft
             if draft is None:
                 usage.notes.append("invalid_draft")
-                trace.attempt(attempt + 1, None)
+                trace.attempt(attempt + 1, None, generated.note)
                 failed = []
                 continue
             if not draft.claims:
                 # The model found nothing to say; regenerating would not help.
                 usage.notes.append("no_claims")
-                trace.attempt(attempt + 1, [])
+                trace.attempt(attempt + 1, [], generated.note)
                 return self._not_found()
             verified = await self._verify(draft, passages, limit, usage)
-            trace.attempt(attempt + 1, [v.trace for v in verified])
+            trace.attempt(attempt + 1, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
             if not failures and _has_answer(verified):
                 return self._answered(draft, verified, dropped=False)

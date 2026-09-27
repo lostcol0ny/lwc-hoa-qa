@@ -44,8 +44,16 @@ class AskTrace(Protocol):
 
     def passages(self, chunks: Sequence[Chunk]) -> None: ...
 
-    def attempt(self, number: int, claims: Sequence[ClaimTrace] | None) -> None:
-        """One answer-model attempt; ``claims`` is None for an invalid draft."""
+    def attempt(
+        self,
+        number: int,
+        claims: Sequence[ClaimTrace] | None,
+        note: str | None = None,
+    ) -> None:
+        """One answer-model attempt; ``claims`` is None for an invalid draft.
+
+        ``note`` is the provider's parse note (see ``ProviderResult.note``).
+        """
         ...
 
 
@@ -63,7 +71,12 @@ class NoTrace:
     def passages(self, chunks: Sequence[Chunk]) -> None:
         pass
 
-    def attempt(self, number: int, claims: Sequence[ClaimTrace] | None) -> None:
+    def attempt(
+        self,
+        number: int,
+        claims: Sequence[ClaimTrace] | None,
+        note: str | None = None,
+    ) -> None:
         pass
 
 

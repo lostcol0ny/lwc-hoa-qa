@@ -1,5 +1,6 @@
 """Answer-model provider; the only module that imports ``anthropic``."""
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -95,12 +96,17 @@ ANSWER_SCHEMA: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class ProviderResult:
-    """``draft`` is None when the output was missing or failed validation."""
+    """``draft`` is None when the output was missing or failed validation.
+
+    ``note`` says why a draft is missing, or what was trimmed from a salvaged
+    one: field paths and error types only, never output text.
+    """
 
     draft: AnswerDraft | None
     model: str
     input_tokens: int
     output_tokens: int
+    note: str | None = None
 
 
 class AnswerProvider(Protocol):
@@ -116,8 +122,64 @@ class AnswerProvider(Protocol):
 
 
 def parse_draft(text: str) -> AnswerDraft | None:
+    return parse_draft_noted(text)[0]
+
+
+def parse_draft_noted(text: str) -> tuple[AnswerDraft | None, str | None]:
+    """Parse the model output; salvage it if only optional content is over cap.
+
+    Over-cap output can be trimmed without weakening any check: citations
+    past MAX_CITATIONS_PER_CLAIM are dropped (a claim then needs support from
+    fewer passages), and a non-essential claim that is malformed, too long,
+    or past MAX_CLAIMS is dropped (never shown). If an essential claim would
+    be lost, the draft is invalid, as before. Returns (draft, note).
+    """
     try:
-        return AnswerDraft.model_validate_json(text)
+        return AnswerDraft.model_validate_json(text), None
+    except ValidationError as exc:
+        reason = _describe(exc)
+    salvaged = _salvage(text)
+    if salvaged is None:
+        return None, f"invalid: {reason}"
+    return salvaged, f"salvaged: {reason}"
+
+
+def _describe(exc: ValidationError) -> str:
+    """Error locations and types; never the offending values."""
+    parts = {
+        ".".join("#" if isinstance(x, int) else str(x) for x in e["loc"])
+        + f":{e['type']}"
+        for e in exc.errors()
+    }
+    return ",".join(sorted(parts))[:300]
+
+
+def _salvage(text: str) -> AnswerDraft | None:
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("claims"), list):
+        return None
+    claims: list[DraftClaim] = []
+    for item in raw["claims"]:
+        essential = not isinstance(item, dict) or item.get("essential") is not False
+        claim = None
+        if isinstance(item, dict):
+            citations = item.get("citations")
+            if isinstance(citations, list):
+                item = {**item, "citations": citations[:MAX_CITATIONS_PER_CLAIM]}
+            try:
+                claim = DraftClaim.model_validate(item)
+            except ValidationError:
+                claim = None
+        if claim is None or len(claims) >= MAX_CLAIMS:
+            if essential:
+                return None
+            continue
+        claims.append(claim)
+    try:
+        return AnswerDraft.model_validate({**raw, "claims": claims})
     except ValidationError:
         return None
 
@@ -155,18 +217,22 @@ class AnthropicAnswerProvider:
             output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
         )
         draft = None
+        note: str | None = f"invalid: stop={response.stop_reason}"
         if response.stop_reason == "end_turn":
             text = "".join(b.text for b in response.content if b.type == "text")
-            draft = parse_draft(text)
+            draft, note = parse_draft_noted(text)
         if draft is None:
             logger.warning(
-                "answer model output unusable: stop=%s", response.stop_reason
+                "answer model output unusable: stop=%s note=%s",
+                response.stop_reason,
+                note,
             )
         return ProviderResult(
             draft=draft,
             model=self._model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            note=note,
         )
 
     async def aclose(self) -> None:

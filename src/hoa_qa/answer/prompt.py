@@ -78,6 +78,10 @@ disagreement between sources, naming the informal or superseded source as \
 such.
 - essential: true if the answer would be wrong or misleading without this \
 claim; false for helpful context.
+- Claims state what the passages say. Do not add commentary about the \
+passages themselves (what kind of document they are, what they do not \
+mention, or how they relate to the question) as a claim: leave out anything \
+the passages do not state.
 - citations: 1 to {MAX_CITATIONS_PER_CLAIM} per claim. chunk_id must be the \
 chunk_id of a provided passage. quote must be copied EXACTLY, character for \
 character, from that passage's text: a short contiguous span, not a \

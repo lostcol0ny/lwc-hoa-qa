@@ -19,13 +19,19 @@ _QUOTE_MAP = str.maketrans(
         "„": '"',
         "‟": '"',
         "″": '"',
+        # Models often retype these; folding them never joins separate words.
+        "…": "...",
+        "–": "-",
+        "—": "-",
+        "‐": "-",
+        "‑": "-",
     }
 )
 _WHITESPACE = re.compile(r"\s+")
 
 
 def normalize(text: str) -> str:
-    """Straighten curly quotes, collapse whitespace, and casefold."""
+    """Straighten quotes, fold ellipses/dashes, collapse whitespace, casefold."""
     return _WHITESPACE.sub(" ", text.translate(_QUOTE_MAP)).strip().casefold()
 
 

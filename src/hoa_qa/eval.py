@@ -142,6 +142,7 @@ class ClaimDiag(BaseModel):
 class AttemptDiag(BaseModel):
     attempt: int
     valid: bool
+    note: str | None = None
     claims: list[ClaimDiag]
 
 
@@ -183,11 +184,17 @@ class DiagnosticsRecorder:
     def passages(self, chunks: Sequence[Chunk]) -> None:
         self.data.passages = [chunk.id for chunk in chunks]
 
-    def attempt(self, number: int, claims: Sequence[ClaimTrace] | None) -> None:
+    def attempt(
+        self,
+        number: int,
+        claims: Sequence[ClaimTrace] | None,
+        note: str | None = None,
+    ) -> None:
         self.data.attempts.append(
             AttemptDiag(
                 attempt=number,
                 valid=claims is not None,
+                note=note,
                 claims=[_claim_diag(c) for c in claims or ()],
             )
         )
