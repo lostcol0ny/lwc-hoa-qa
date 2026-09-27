@@ -100,6 +100,8 @@ class ProviderResult:
 
     ``note`` says why a draft is missing, or what was trimmed from a salvaged
     one: field paths and error types only, never output text.
+    ``claims_trimmed`` is True when salvage dropped a (non-essential) claim,
+    so the answer must carry OMITTED_NOTE like any other dropped claim.
     """
 
     draft: AnswerDraft | None
@@ -107,6 +109,7 @@ class ProviderResult:
     input_tokens: int
     output_tokens: int
     note: str | None = None
+    claims_trimmed: bool = False
 
 
 class AnswerProvider(Protocol):
@@ -125,23 +128,36 @@ def parse_draft(text: str) -> AnswerDraft | None:
     return parse_draft_noted(text)[0]
 
 
+@dataclass(frozen=True)
+class ParsedDraft:
+    draft: AnswerDraft | None
+    note: str | None = None
+    claims_trimmed: bool = False
+
+
 def parse_draft_noted(text: str) -> tuple[AnswerDraft | None, str | None]:
+    parsed = parse_draft_checked(text)
+    return parsed.draft, parsed.note
+
+
+def parse_draft_checked(text: str) -> ParsedDraft:
     """Parse the model output; salvage it if only optional content is over cap.
 
     Over-cap output can be trimmed without weakening any check: citations
     past MAX_CITATIONS_PER_CLAIM are dropped (a claim then needs support from
     fewer passages), and a non-essential claim that is malformed, too long,
     or past MAX_CLAIMS is dropped (never shown). If an essential claim would
-    be lost, the draft is invalid, as before. Returns (draft, note).
+    be lost, the draft is invalid, as before.
     """
     try:
-        return AnswerDraft.model_validate_json(text), None
+        return ParsedDraft(AnswerDraft.model_validate_json(text))
     except ValidationError as exc:
         reason = _describe(exc)
     salvaged = _salvage(text)
     if salvaged is None:
-        return None, f"invalid: {reason}"
-    return salvaged, f"salvaged: {reason}"
+        return ParsedDraft(None, f"invalid: {reason}")
+    draft, dropped = salvaged
+    return ParsedDraft(draft, f"salvaged: {reason}", claims_trimmed=dropped > 0)
 
 
 def _describe(exc: ValidationError) -> str:
@@ -154,7 +170,8 @@ def _describe(exc: ValidationError) -> str:
     return ",".join(sorted(parts))[:300]
 
 
-def _salvage(text: str) -> AnswerDraft | None:
+def _salvage(text: str) -> tuple[AnswerDraft, int] | None:
+    """The trimmed draft and how many claims were dropped, or None."""
     try:
         raw = json.loads(text)
     except ValueError:
@@ -162,6 +179,7 @@ def _salvage(text: str) -> AnswerDraft | None:
     if not isinstance(raw, dict) or not isinstance(raw.get("claims"), list):
         return None
     claims: list[DraftClaim] = []
+    dropped = 0
     for item in raw["claims"]:
         essential = not isinstance(item, dict) or item.get("essential") is not False
         claim = None
@@ -176,10 +194,11 @@ def _salvage(text: str) -> AnswerDraft | None:
         if claim is None or len(claims) >= MAX_CLAIMS:
             if essential:
                 return None
+            dropped += 1
             continue
         claims.append(claim)
     try:
-        return AnswerDraft.model_validate({**raw, "claims": claims})
+        return AnswerDraft.model_validate({**raw, "claims": claims}), dropped
     except ValidationError:
         return None
 
@@ -216,11 +235,11 @@ class AnthropicAnswerProvider:
             messages=[{"role": "user", "content": prompt.user}],
             output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
         )
-        draft = None
-        note: str | None = f"invalid: stop={response.stop_reason}"
+        parsed = ParsedDraft(None, f"invalid: stop={response.stop_reason}")
         if response.stop_reason == "end_turn":
             text = "".join(b.text for b in response.content if b.type == "text")
-            draft, note = parse_draft_noted(text)
+            parsed = parse_draft_checked(text)
+        draft, note = parsed.draft, parsed.note
         if draft is None:
             logger.warning(
                 "answer model output unusable: stop=%s note=%s",
@@ -233,6 +252,7 @@ class AnthropicAnswerProvider:
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             note=note,
+            claims_trimmed=parsed.claims_trimmed,
         )
 
     async def aclose(self) -> None:

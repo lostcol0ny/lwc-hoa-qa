@@ -7,7 +7,7 @@ from hoa_qa.answer.prompt import (
     MAX_CLAIMS,
     MAX_STATEMENT_CHARS,
 )
-from hoa_qa.answer.provider import parse_draft, parse_draft_noted
+from hoa_qa.answer.provider import parse_draft, parse_draft_checked, parse_draft_noted
 
 
 def claim(statement: str = "Fact.", *, essential: bool = True, cites: int = 1) -> dict:
@@ -62,3 +62,12 @@ def test_losing_an_essential_claim_invalidates_the_draft() -> None:
 def test_unparseable_output_is_invalid() -> None:
     draft, note = parse_draft_noted("{not json")
     assert draft is None and note is not None and note.startswith("invalid: ")
+
+
+def test_salvage_reports_dropped_claims_but_not_trimmed_citations() -> None:
+    cut = parse_draft_checked(output(claim(cites=MAX_CITATIONS_PER_CLAIM + 1)))
+    assert cut.draft is not None and not cut.claims_trimmed
+    long = claim("x" * (MAX_STATEMENT_CHARS + 1), essential=False)
+    dropped = parse_draft_checked(output(claim(), long))
+    assert dropped.draft is not None and dropped.claims_trimmed
+    assert not parse_draft_checked(output(claim())).claims_trimmed
