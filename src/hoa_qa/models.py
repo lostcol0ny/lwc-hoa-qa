@@ -20,10 +20,12 @@ from pydantic import (
     model_validator,
 )
 
+_HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
+
 
 def validate_https(value: str) -> str:
     """Validate public HTTPS links without rewriting their query or fragment."""
-    url = TypeAdapter(HttpUrl).validate_python(value)
+    url = _HTTP_URL_ADAPTER.validate_python(value)
     if url.scheme != "https" or value != value.strip():
         raise ValueError("URL must be HTTPS without outer whitespace")
     if "@" in urlsplit(value).netloc or url.username or url.password:
@@ -80,6 +82,9 @@ class Chunk(Model):
 
     A year-only source date is stored as YYYY-01-01; citation_label carries
     the plain year so consumers can see the original date precision.
+    effective_date is the date used for 'newer wins' ordering and must be set
+    for every non-superseded authority except form when unknown;
+    published_date is informational.
     """
 
     id: str = Field(min_length=1)
@@ -107,6 +112,8 @@ class Chunk(Model):
 
     @model_validator(mode="after")
     def consistent_metadata(self) -> Self:
+        if self.superseded_by == self.doc_id:
+            raise ValueError("superseded_by must not name the same doc_id")
         if (self.authority == Authority.superseded) != (self.superseded_by is not None):
             raise ValueError(
                 "superseded authority requires superseded_by and vice versa"

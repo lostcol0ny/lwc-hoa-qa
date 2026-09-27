@@ -143,7 +143,7 @@
       "text_clean": "2nd offense - $50.00 fine, 3rd offense - $100.00, 4th and subsequent offense - $50.00 per day",
       "text_raw": "2nd offense - $50.00 fine, 3rd offense - $100.00, 4th and subsequent offense - $50.00 per day",
       "authority": "informal",
-      "effective_date": null,
+      "effective_date": "2022-10-20",
       "published_date": "2022-10-20",
       "superseded_by": null,
       "token_estimate": 34
@@ -153,9 +153,9 @@
       "doc_id": "declaration",
       "doc_title": "LWC Declaration of CC&Rs",
       "source_url": "https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/3d427ceb-9051-40d3-b79d-cbabab98bc72/LWC-Declaration-of-CC.pdf?ver=1749305476488",
-      "page_start": null,
-      "page_end": null,
-      "citation_label": "Declaration, Art. 8, 2001",
+      "page_start": 28,
+      "page_end": 28,
+      "citation_label": "Declaration, Art. 8, 2001, PDF p. 28 (printed p. 23)",
       "heading_path": [
         "Article 8"
       ],

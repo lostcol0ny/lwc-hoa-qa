@@ -364,7 +364,7 @@ def test_fixture_history() -> None:
     corpus = load_corpus(FIXTURE)
     blog, declaration = corpus.chunks[-2:]
     assert blog.authority == Authority.informal
-    assert blog.published_date == date(2022, 10, 20)
+    assert blog.published_date == blog.effective_date == date(2022, 10, 20)
     assert blog.text_clean == (
         "2nd offense - $50.00 fine, 3rd offense - $100.00, "
         "4th and subsequent offense - $50.00 per day"
@@ -372,6 +372,8 @@ def test_fixture_history() -> None:
     assert declaration.authority == Authority.governing
     assert "($326.00) per Unit" in declaration.text_clean
     assert declaration.source_url.endswith(".pdf?ver=1749305476488")
+    assert declaration.page_start == declaration.page_end == 28
+    assert citation_url(declaration) == declaration.source_url + "#page=28"
     assert corpus.chunks[4].text_clean.endswith("Motion approved.")
     assert (
         corpus.chunks[5].text_clean
@@ -385,3 +387,14 @@ def test_empty_query_delimiter(chunk_data: dict[str, Any]) -> None:
         {**chunk_data, "source_url": "https://example.org/a.pdf?"}
     )
     assert citation_url(chunk) == "https://example.org/a.pdf#page=2"
+
+
+def test_self_supersession(chunk_data: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="same doc_id"):
+        Chunk.model_validate(
+            {
+                **chunk_data,
+                "authority": "superseded",
+                "superseded_by": chunk_data["doc_id"],
+            }
+        )

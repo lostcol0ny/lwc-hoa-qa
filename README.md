@@ -34,6 +34,15 @@ Corpus loading checks replacement references, source hashes, and chunk counts.
 Dates accept calendar dates only; year-only sources use YYYY-01-01 with the plain
 year in citation_label. Build timestamps must include a timezone.
 
-`tests/fixtures/mini_corpus.json` is synthetic test data based on the spec, with
-illustrative URLs and passages; it is not an authoritative source or a built
-production corpus. Production corpus files stay out of git.
+`tests/fixtures/mini_corpus.json` mixes synthetic examples and verbatim excerpts:
+
+- `blog-2022-violations` and `declaration-8-assessment` contain verbatim excerpts
+  with real source URLs; the Declaration excerpt is on PDF page 28 (printed 23).
+- `website-2026-dues` contains the verbatim website banner, but its example.org
+  URL is synthetic.
+- The bylaws, 2023 dish/fines rules, 2016 fines rules, and assessment minutes
+  chunks use synthetic passages and example.org URLs based on the spec.
+
+Fixture source hashes describe the fixture text, not downloaded source files.
+This is test data, not an authoritative source or a built production corpus.
+Production corpus files stay out of git.
