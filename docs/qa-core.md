@@ -114,7 +114,9 @@ dates. An unlisted `ANSWER_MODEL` is costed at the most expensive tier.
 | `claude-haiku-4-5` answer | $1 / MTok in, $5 / MTok out | ~3–4K in, ~500 out | ~$0.006 |
 | **Answered question** | | | **~$0.01** (up to ~2× if it regenerates) |
 
-These are estimates. Integration (unit 5) replaces them with measured numbers.
+These are estimates. The integration unit had no API keys, so the first manual
+`eval.yml` run (its `total_cost_usd`) supplies measured numbers; the README
+has the real-corpus `max_cost_usd`.
 A gate refusal costs only the gate. Invalid input costs nothing.
 
 ### Worst-case bound: `max_cost_usd` (provable)
