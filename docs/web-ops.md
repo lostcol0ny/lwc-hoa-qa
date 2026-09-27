@@ -47,7 +47,7 @@ the same way:
 | Status | Outcome | When |
 |---|---|---|
 | 200 | from the asker, or `budget_exhausted` | normal |
-| 403 | `error` | the `Origin` header names another site |
+| 403 | `error` | the `Origin` header isn't this site's exact origin, or is malformed |
 | 422 | `invalid_input` | the question is empty, over 500 characters, or the body isn't JSON with exactly a `question` field. **Chosen over a 200 `invalid_input`** so clients and logs can tell bad input from answers; the body is still an `Answer` |
 | 429 | `error` ("slow down") | over the per-IP rate limit |
 | 500 | `error` (generic) | the asker raised |
@@ -58,6 +58,7 @@ the same way:
 | Variable | Default | Purpose |
 |---|---|---|
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | Monthly spend cap |
+| `BUDGET_RESERVE_PER_REQUEST_USD` | `0.05` | Minimum per-request reservation R (see below). Must be positive; an invalid value stops the app from starting |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Shared counters for the budget and rate limiter |
 | `RATE_LIMIT_PER_HOUR`, `RATE_LIMIT_PER_DAY` | `10`, `50` | App-level per-IP limits |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Document link for budget-exhausted answers and the page; the same variable the QA core uses for refusals. Must be `https://` |
@@ -75,18 +76,63 @@ it logs a warning.
 
 ## Budget and cost model
 
-- Each request's cost is the asker's `estimated_cost_usd` (Jev gate + sweep +
-  verify, plus the answer model; see `docs/qa-core.md` in the QA core unit).
-- Before calling the asker, the app reads the month's total. If it is
-  `>= MONTHLY_BUDGET_USD`, it returns `outcome=budget_exhausted` with a link to
-  the documents, and **the asker is not called**.
-- After the call, the cost is added with `INCRBYFLOAT` on `budget:YYYY-MM`
-  (UTC calendar month) with a 40-day TTL, in one Upstash `/multi-exec`
-  transaction.
-- The check-then-add isn't one atomic step, so concurrent requests near the
-  limit can overshoot by roughly (concurrent requests × cost per request): a few
-  cents. Set provider-side spend limits (Anthropic console, TypeSafe if offered)
-  as the hard backstop.
+Each request's cost is the asker's `estimated_cost_usd` (Jev gate + sweep +
+verify, plus the answer model; see `docs/qa-core.md`). The budget counter is
+`budget:YYYY-MM` (UTC calendar month) with a 40-day TTL.
+
+### Reserve, then reconcile
+
+1. **Reserve.** Before calling the asker, the app atomically adds a worst-case
+   amount **R** to the month's counter, but only if the new total stays within
+   `MONTHLY_BUDGET_USD`:
+
+   `R = max(BUDGET_RESERVE_PER_REQUEST_USD, asker.max_cost_usd)`
+
+   `max_cost_usd` is optional on the asker (read with `getattr`); invalid values
+   are ignored.
+   - Upstash: one `EVAL` of a Lua script (`RESERVE_SCRIPT` in
+     `src/hoa_qa/budget.py`) that does GET → compare → `INCRBYFLOAT` → `EXPIRE`.
+     Upstash runs a script as a single atomic step under a lock, so concurrent
+     reservations can't interleave
+     ([EVAL](https://upstash.com/docs/redis/commands/scripting/eval), which is
+     also available over the REST API as a JSON-array POST).
+   - In memory (dev/tests): the same check-and-add under an `asyncio.Lock`.
+2. **Refuse on any failure.** If the reservation doesn't fit, or the store
+   errors (for example Redis reads work but writes fail), the request gets
+   `outcome=budget_exhausted` and **the asker is never called**.
+3. **Reconcile.** After the call, the app adds `actual − R` (usually negative)
+   to the same month key the reservation used, so a request that straddles
+   midnight UTC on the 1st settles against the month that admitted it.
+   - It reconciles with whatever cost the asker reports, including on `error`
+     outcomes. If the asker raises, it uses an `estimated_cost_usd` attribute
+     on the exception if there is one; otherwise **the full reservation stays**.
+   - A missing, negative or non-finite cost keeps the full reservation.
+   - If the reconcile write fails, **the full reservation stays**. It's logged
+     with the request ID only and not retried.
+   - If `actual > R` (it shouldn't happen), the excess is added and a warning
+     is logged.
+
+### The guarantee
+
+Admission is atomic, so the counter never passes the budget because of
+concurrency: with budget B, at most `floor(B / R)` requests can be in flight
+at once, however many IPs send them (a test fires 50 concurrent requests at
+B = 3R and exactly 3 are admitted). The only way real spend can exceed B is a
+request whose actual cost exceeds its reservation:
+
+`worst-case overspend = Σ max(0, actual_i − R_i)`
+
+That is **zero** when the asker's `max_cost_usd` is an honest upper bound (or R
+is set at or above the true per-request maximum). Every accounting failure
+errs the other way: it keeps reservations and over-counts, which can refuse
+questions early but never spends past the cap.
+
+Consequences:
+- If `MONTHLY_BUDGET_USD < R`, nothing is admitted.
+- Near the cap, questions are refused while `spend + R > B`, even if the real
+  cost would have fit. That margin (at most R) goes unused.
+- Provider-side spend limits (Anthropic console, TypeSafe if offered) remain a
+  good backstop against a dishonest or buggy `max_cost_usd`.
 - Rate-limited, invalid and budget-exhausted requests cost nothing.
 
 ### Fail-closed behavior
@@ -95,9 +141,9 @@ it logs a warning.
 |---|---|
 | `VERCEL_ENV=production` and Upstash not configured | Every question gets `budget_exhausted`. Per-instance memory can't enforce a shared cap, so the app refuses instead of running uncapped |
 | `VERCEL_ENV=production` and `MONTHLY_BUDGET_USD` missing/invalid | Budget is $0, so every question gets `budget_exhausted` |
-| Upstash errors while reading the budget | That request gets `budget_exhausted` |
-| Upstash errors while adding spend | The answer is still returned; the error type is logged |
-| Upstash errors in the rate limiter | The request is allowed (fail open); the budget still caps spend |
+| Upstash errors while reserving (read or write) | That request gets `budget_exhausted`; the asker isn't called |
+| Upstash errors while reconciling | The answer is returned and the full reservation stays counted; the error type and request ID are logged |
+| Upstash errors in the rate limiter | The request is allowed (fail open); see below |
 | Preview deployments without Upstash | In-memory counters (per function instance) |
 
 ## Rate limiting
@@ -109,6 +155,13 @@ Two layers:
 2. **App: per-IP fixed windows** in the same counter store as the budget
    (Upstash in production, memory in dev): `RATE_LIMIT_PER_HOUR` (10) and
    `RATE_LIMIT_PER_DAY` (50). Keys hold a SHA-256 digest of the IP, not the IP.
+
+**Why the app limiter fails open.** The rate limiter protects fairness (one
+neighbor can't use up the month), not money. Money is bounded by the atomic
+budget reservation, which fails closed and applies across all IPs. If Upstash
+writes fail, the reservation already refuses every question, so a fail-open
+limiter can't let spend through. Failing closed on a limiter blip would only
+lock out neighbors while the money bound stays the same.
 
 **Client IP and spoofing.** The app trusts `x-forwarded-for` (first entry) and
 `x-real-ip` **only when `VERCEL=1`**. Vercel's edge overwrites these headers with
@@ -158,11 +211,23 @@ never reach the app (a test keeps the two copies identical):
   a restrictive `Permissions-Policy`, `X-Frame-Options: DENY`,
   `Cross-Origin-Opener-Policy: same-origin`, and `Cache-Control: no-store` on `/api/*`.
 - **CORS:** there is no CORS middleware, so no `Access-Control-Allow-*` header is
-  ever sent and browsers block cross-origin reads and JSON preflights. The app
-  also returns 403 for a POST whose `Origin` names another host, and FastAPI
-  rejects non-JSON bodies (422), which blocks "simple" cross-site form posts.
-  Non-browser clients can still call the API; the rate limits and budget cover
-  them.
+  ever sent and browsers block cross-origin reads and JSON preflights. FastAPI
+  also rejects non-JSON bodies (422), which blocks "simple" cross-site form
+  posts.
+- **Origin check** on `POST /api/ask`: the `Origin` header must equal this
+  site's origin, compared as a normalized (scheme, hostname, effective port)
+  tuple. Default ports are implicit, so `https://hoa.example` and
+  `https://hoa.example:443` match, but `http://hoa.example` doesn't match an
+  HTTPS site.
+  - The expected origin comes from the `Host` header. On Vercel the scheme comes
+    from `x-forwarded-proto` (set by Vercel's edge; `https` if absent), because
+    the function itself sees an internal connection. Locally it comes from the
+    request URL.
+  - Malformed origins get 403, never a 500: `null`, other schemes, paths,
+    userinfo, bad ports, whitespace.
+  - **A missing `Origin` is allowed.** Browsers send `Origin` on every POST, so
+    only non-browser clients omit it, and they could forge any value anyway.
+    The rate limits and budget cover them.
 - OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`) are disabled.
 
 The page renders response data with `textContent`/`createElement` only, and uses

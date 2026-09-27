@@ -1,7 +1,6 @@
 import asyncio
 import importlib.util
 import logging
-import math
 import os
 
 import pytest
@@ -69,16 +68,6 @@ def test_budget_exhausted_never_calls_asker() -> None:
     assert h.asker.questions == []
 
 
-def test_spend_is_added_after_each_call() -> None:
-    h = build_harness(asker=RecordingAsker(cost_usd=0.02), monthly_budget_usd=0.05)
-    for expected in (0.02, 0.04, 0.06):
-        assert ask(h).json()["outcome"] == "answered"
-        assert math.isclose(asyncio.run(h.budget.get_month_spend()), expected)
-    # 0.06 >= 0.05: the next question is refused without calling the asker.
-    assert ask(h).json()["outcome"] == "budget_exhausted"
-    assert len(h.asker.questions) == 3
-
-
 def test_production_without_upstash_fails_closed() -> None:
     env = {"VERCEL_ENV": "production", "MONTHLY_BUDGET_USD": "50"}
     app = create_app(env=env)
@@ -88,17 +77,6 @@ def test_production_without_upstash_fails_closed() -> None:
     response = TestClient(app).post("/api/ask", json={"question": QUESTION})
     assert response.json()["outcome"] == "budget_exhausted"
     assert fake.questions == []
-
-
-def test_budget_store_failure_fails_closed() -> None:
-    h = build_harness()
-
-    async def broken() -> float:
-        raise ConnectionError("redis down")
-
-    h.budget.get_month_spend = broken  # type: ignore[method-assign]
-    assert ask(h).json()["outcome"] == "budget_exhausted"
-    assert h.asker.questions == []
 
 
 def test_asker_exception_is_generic_and_not_logged(

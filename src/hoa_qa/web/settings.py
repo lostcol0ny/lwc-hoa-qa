@@ -1,6 +1,7 @@
 """Web-layer configuration, read once from environment variables."""
 
 import logging
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CORPUS_PATH = Path("corpus.json")
 DEFAULT_DOCUMENTS_URL = "https://lakewoodcreekhoa.com/"
 DEFAULT_MONTHLY_BUDGET_USD = 5.0
+DEFAULT_BUDGET_RESERVE_PER_REQUEST_USD = 0.05
 DEFAULT_RATE_LIMIT_PER_HOUR = 10
 DEFAULT_RATE_LIMIT_PER_DAY = 50
 
@@ -57,6 +59,7 @@ class WebSettings:
     corpus_path: Path
     documents_url: str
     monthly_budget_usd: float
+    budget_reserve_per_request_usd: float
     rate_limit_per_hour: int
     rate_limit_per_day: int
     fake_asker: bool
@@ -78,6 +81,7 @@ class WebSettings:
             corpus_path=Path(env.get("CORPUS_PATH") or DEFAULT_CORPUS_PATH),
             documents_url=documents_url,
             monthly_budget_usd=_budget(env, production),
+            budget_reserve_per_request_usd=_reserve(env),
             rate_limit_per_hour=_positive_int(
                 env, "RATE_LIMIT_PER_HOUR", DEFAULT_RATE_LIMIT_PER_HOUR
             ),
@@ -102,6 +106,20 @@ def _budget(env: Mapping[str, str], production: bool) -> float:
         logger.error("MONTHLY_BUDGET_USD missing or invalid; failing closed at $0")
         return 0.0
     return DEFAULT_MONTHLY_BUDGET_USD
+
+
+def _reserve(env: Mapping[str, str]) -> float:
+    """Parse BUDGET_RESERVE_PER_REQUEST_USD; a bad value refuses to start."""
+    raw = env.get("BUDGET_RESERVE_PER_REQUEST_USD", "").strip()
+    if not raw:
+        return DEFAULT_BUDGET_RESERVE_PER_REQUEST_USD
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigError("BUDGET_RESERVE_PER_REQUEST_USD must be a positive amount")
+    return value
 
 
 def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
