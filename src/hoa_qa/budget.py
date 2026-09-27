@@ -16,21 +16,24 @@ Units: counters hold **integers**. Budget amounts are stored as micro-dollars
 only at the edges (``usd_to_micros``/``micros_to_usd``). Charges round *up* and
 the budget limit rounds *down*, so rounding never admits extra spend.
 
-Fail-closed rule: when ``VERCEL_ENV=production`` and Upstash is not configured,
-``select_budget_store`` returns a store that always reports the budget as
-spent. A misconfigured production deployment refuses questions instead of
-running with no cap.
+Fail-closed rule: when ``VERCEL_ENV=production`` and Upstash/KV Redis is not
+configured or has an incomplete configuration, ``select_budget_store`` returns
+a store that always reports the budget as spent. A misconfigured production
+deployment refuses questions instead of running with no cap.
 """
 
 import asyncio
+import logging
 import math
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
+
+logger = logging.getLogger("hoa_qa.budget")
 
 BUDGET_TTL_SECONDS = 40 * 24 * 60 * 60
 """Month keys outlive their month by ~10 days, then Redis deletes them."""
@@ -374,20 +377,136 @@ class FailClosedBudgetStore:
         return math.inf
 
 
+UPSTASH_URL_VAR = "UPSTASH_REDIS_REST_URL"
+UPSTASH_TOKEN_VAR = "UPSTASH_REDIS_REST_TOKEN"
+KV_URL_VAR = "KV_REST_API_URL"
+KV_TOKEN_VAR = "KV_REST_API_TOKEN"
+
+
+@dataclass(frozen=True)
+class RedisConfigResult:
+    """Result of resolving Redis credentials as matched pairs."""
+
+    credentials: tuple[str, str] | None = field(default=None, repr=False)
+    missing_variables: tuple[str, ...] = ()
+    incomplete: bool = False
+    family: str | None = None
+
+
+def _clean_env(env: Mapping[str, str], key: str) -> str:
+    raw = env.get(key)
+    return "" if raw is None else str(raw).strip()
+
+
+def resolve_redis_config(env: Mapping[str, str]) -> RedisConfigResult:
+    """Resolve Redis credentials as matched pairs.
+
+    - Resolves credentials as pairs: uses the UPSTASH pair if both its URL
+      and token are set; otherwise the KV pair if both are set. URLs and
+      tokens are never mixed between families.
+    - Any incomplete pair (exactly one of URL or token set in either family)
+      is a configuration error, even if the other family is complete.
+    - KV_REST_API_READ_ONLY_TOKEN is never used.
+    """
+    upstash_url = _clean_env(env, UPSTASH_URL_VAR)
+    upstash_token = _clean_env(env, UPSTASH_TOKEN_VAR)
+    kv_url = _clean_env(env, KV_URL_VAR)
+    kv_token = _clean_env(env, KV_TOKEN_VAR)
+
+    missing: list[str] = []
+
+    # Check Upstash pair completeness
+    upstash_has_url = bool(upstash_url)
+    upstash_has_token = bool(upstash_token)
+    if upstash_has_url != upstash_has_token:
+        if upstash_has_url:
+            missing.append(UPSTASH_TOKEN_VAR)
+        else:
+            missing.append(UPSTASH_URL_VAR)
+
+    # Check KV pair completeness (KV_REST_API_READ_ONLY_TOKEN is never used)
+    kv_has_url = bool(kv_url)
+    kv_has_token = bool(kv_token)
+    if kv_has_url != kv_has_token:
+        if kv_has_url:
+            missing.append(KV_TOKEN_VAR)
+        else:
+            missing.append(KV_URL_VAR)
+
+    if missing:
+        # Any incomplete pair is a configuration error, even if the other
+        # family is complete.
+        return RedisConfigResult(
+            credentials=None,
+            missing_variables=tuple(sorted(missing)),
+            incomplete=True,
+            family=None,
+        )
+
+    # UPSTASH pair takes precedence if complete
+    if upstash_has_url and upstash_has_token:
+        return RedisConfigResult(
+            credentials=(upstash_url, upstash_token),
+            missing_variables=(),
+            incomplete=False,
+            family="upstash",
+        )
+
+    # KV pair used if complete
+    if kv_has_url and kv_has_token:
+        return RedisConfigResult(
+            credentials=(kv_url, kv_token),
+            missing_variables=(),
+            incomplete=False,
+            family="kv",
+        )
+
+    # Neither pair is set
+    return RedisConfigResult(
+        credentials=None,
+        missing_variables=(),
+        incomplete=False,
+        family=None,
+    )
+
+
 def upstash_config(env: Mapping[str, str]) -> tuple[str, str] | None:
-    url = (
-        env.get("UPSTASH_REDIS_REST_URL", "").strip()
-        or env.get("KV_REST_API_URL", "").strip()
-    )
-    token = (
-        env.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
-        or env.get("KV_REST_API_TOKEN", "").strip()
-    )
-    return (url, token) if url and token else None
+    return resolve_redis_config(env).credentials
 
 
 def is_production(env: Mapping[str, str]) -> bool:
     return env.get("VERCEL_ENV") == "production"
+
+
+def check_redis_config(
+    env: Mapping[str, str],
+    log: logging.Logger | None = None,
+) -> None:
+    """Log Redis configuration status on startup.
+
+    In production: logs an ERROR naming missing variables for incomplete pairs
+    or logs an ERROR if Redis is unconfigured, without leaking secrets or URLs.
+    In development: logs a WARNING naming missing variables for incomplete pairs.
+    """
+    log = log or logger
+    redis = resolve_redis_config(env)
+    is_prod = is_production(env)
+    if redis.incomplete:
+        missing_str = ", ".join(redis.missing_variables)
+        if is_prod:
+            log.error(
+                "Redis configuration incomplete: missing %s; "
+                "failing closed in production",
+                missing_str,
+            )
+        else:
+            log.warning(
+                "Redis configuration incomplete: missing %s; "
+                "falling back to in-memory store",
+                missing_str,
+            )
+    elif is_prod and redis.credentials is None:
+        log.error("Redis is not configured in production; failing closed")
 
 
 def select_counter_store(env: Mapping[str, str]) -> CounterStore:
@@ -397,9 +516,11 @@ def select_counter_store(env: Mapping[str, str]) -> CounterStore:
 
 
 def select_budget_store(
-    env: Mapping[str, str], counters: CounterStore | None = None
+    env: Mapping[str, str],
+    counters: CounterStore | None = None,
 ) -> BudgetStore:
     """Upstash when configured; in-memory in dev; fail closed in production."""
-    if upstash_config(env) is None and is_production(env):
+    redis = resolve_redis_config(env)
+    if is_production(env) and (redis.credentials is None or redis.incomplete):
         return FailClosedBudgetStore()
     return CounterBudgetStore(counters or select_counter_store(env))

@@ -27,6 +27,9 @@ from hoa_qa.budget import (
     BudgetStore,
     CounterStore,
     Reservation,
+    check_redis_config,
+    is_production,
+    resolve_redis_config,
     select_budget_store,
     select_counter_store,
 )
@@ -120,6 +123,7 @@ def create_app(
     env = os.environ if env is None else env
     configure_logging()
     check_sdk_debug_logging(env)
+    check_redis_config(env, log=logger)
     config = settings or WebSettings.from_env(env)
     counter_store = counters or select_counter_store(env)
     budget = budget_store or select_budget_store(env, counter_store)
@@ -271,6 +275,7 @@ def create_app(
                 {"status": "unavailable", "documents_url": settings.documents_url},
                 status_code=503,
             )
+        app_env = getattr(request.app.state, "env", None)
         return JSONResponse(
             {
                 "status": "ok",
@@ -279,8 +284,11 @@ def create_app(
                 "documents_url": settings.documents_url,
                 # Uses the asker's max_cost_usd once a request has built it.
                 "budget_config": budget_config(
-                    settings, getattr(request.app.state, "asker", None)
+                    settings,
+                    getattr(request.app.state, "asker", None),
+                    env=app_env,
                 ),
+                "budget_config_missing": budget_config_missing(app_env),
             }
         )
 
@@ -325,19 +333,52 @@ def reservation_amount(settings: WebSettings, asker: object) -> float:
     return max(reserve, declared)
 
 
-BudgetConfig = Literal["ok", "budget_below_reservation"]
+BudgetConfig = Literal[
+    "ok",
+    "budget_below_reservation",
+    "redis_config_incomplete",
+    "redis_not_configured",
+]
 
 
-def budget_config(settings: WebSettings, asker: object) -> BudgetConfig:
-    """``budget_below_reservation`` when ``MONTHLY_BUDGET_USD < R``: then no
-    question can ever be admitted. Not sensitive: it reveals neither amount."""
+def budget_config(
+    settings: WebSettings,
+    asker: object,
+    env: Mapping[str, str] | None = None,
+) -> BudgetConfig:
+    """Check budget and Redis configuration status for /api/health.
+
+    In production, reports a specific reason for an incomplete Redis pair
+    (``redis_config_incomplete``) or missing Redis (``redis_not_configured``).
+    When configured, reports ``budget_below_reservation`` if
+    MONTHLY_BUDGET_USD < R, or ``ok``.
+    """
+    env_map = os.environ if env is None else env
+    if is_production(env_map):
+        redis = resolve_redis_config(env_map)
+        if redis.incomplete:
+            return "redis_config_incomplete"
+        if redis.credentials is None:
+            return "redis_not_configured"
     if settings.monthly_budget_usd < reservation_amount(settings, asker):
         return "budget_below_reservation"
     return "ok"
 
 
+def budget_config_missing(
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return missing Redis variable names if Redis is incomplete in production."""
+    env_map = os.environ if env is None else env
+    if is_production(env_map):
+        redis = resolve_redis_config(env_map)
+        if redis.incomplete:
+            return list(redis.missing_variables)
+    return []
+
+
 def warn_if_budget_below_reservation(settings: WebSettings, asker: object) -> None:
-    if budget_config(settings, asker) == "budget_below_reservation":
+    if settings.monthly_budget_usd < reservation_amount(settings, asker):
         logger.warning(
             "MONTHLY_BUDGET_USD=%.6f is below the per-request reservation "
             "R=%.6f; every question will get budget_exhausted",
