@@ -12,9 +12,18 @@ from hoa_qa.ingest.fetch import Fetcher
 from hoa_qa.ingest.pii import check_pii
 from hoa_qa.ingest.section import citation, parts, sections
 from hoa_qa.ingest.sources import load_sources
+from hoa_qa.ingest.statutes import (
+    MANIFEST,
+    check_current,
+    load_snapshot,
+    snapshot_dir,
+    statute_chunks,
+)
 from hoa_qa.models import Chunk, Corpus, CorpusManifest, load_corpus
 
 OCR_SOURCES = {"declaration", "bylaws", "articles", "rules-2016"}
+# Snapshot of ILGA statute files, next to sources.yaml (see ingest.statutes).
+STATUTES_DIR = "statutes"
 
 
 def build(
@@ -29,15 +38,20 @@ def build(
 ) -> Corpus:
     """Build and atomically write the corpus.
 
-    ``crawl_date`` dates ``effective_date: crawl`` sources (default: today, UTC).
-    Sectioning warnings (rejected non-monotonic headings) are appended to
-    ``warnings`` when given.
+    ``crawl_date`` is the build date (default: today, UTC). It dates
+    ``effective_date: crawl`` sources, and statute versions must be in force
+    on it. Sectioning warnings (rejected non-monotonic headings, statute
+    sections left out) are appended to ``warnings`` when given. Statutes come
+    from the reviewed ``statutes/`` snapshot next to ``sources_path``; only
+    ILGA's directory listing is fetched, uncached, to detect a newer copy.
     """
     build_time = datetime.now(UTC)
     crawl_date = crawl_date or build_time.date()
     warnings = warnings if warnings is not None else []
     sources = load_sources(sources_path)
     fetch = fetcher if fetcher is not None else Fetcher(out / "cache")
+    listing = fetch.fresh if isinstance(fetch, Fetcher) else fetch
+    statutes = sources_path.parent / STATUTES_DIR
     cleanup = None if no_llm else (repair if repair is not None else OCRCleanup())
     chunks: list[Chunk] = []
     hashes: dict[str, str] = {}
@@ -45,6 +59,20 @@ def build(
     errors: list[str] = []
     for source in sources:
         if source.exclude:
+            continue
+        if source.kind == "statute":
+            snapshot, documents = load_snapshot(statutes, source)
+            check_current(snapshot, source, listing)
+            manifest_bytes = (snapshot_dir(statutes, source) / MANIFEST).read_bytes()
+            hashes[source.doc_id] = hashlib.sha256(manifest_bytes).hexdigest()
+            for chunk in statute_chunks(
+                source, snapshot, documents, crawl_date, warnings
+            ):
+                try:
+                    check_pii(chunk.text_clean, source.doc_id)
+                except ValueError as exc:
+                    errors.append(f"{chunk.id}: {exc}")
+                chunks.append(chunk)
             continue
         data = fetch(source.url)
         hashes[source.doc_id] = hashlib.sha256(data).hexdigest()

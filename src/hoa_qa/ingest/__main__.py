@@ -1,21 +1,45 @@
-"""python -m hoa_qa.ingest build --out build/ [--no-llm]."""
+"""python -m hoa_qa.ingest build --out build/ [--no-llm].
+
+python -m hoa_qa.ingest refresh-statutes rewrites the statutes/ snapshot from
+ILGA's file repository (about half an hour at its 10-second crawl delay).
+"""
 
 import argparse
 import json
+import tempfile
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
-from hoa_qa.ingest import OCR_SOURCES, build
+from hoa_qa.ingest import OCR_SOURCES, STATUTES_DIR, build
+from hoa_qa.ingest.fetch import Fetcher
+from hoa_qa.ingest.sources import load_sources
+from hoa_qa.ingest.statutes import refresh
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["build"])
+    parser.add_argument("command", choices=["build", "refresh-statutes"])
     parser.add_argument("--out", type=Path, default=Path("build"))
     parser.add_argument("--sources", type=Path, default=Path("sources.yaml"))
     parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--max-ocr-fallback-fraction", type=float, default=0.10)
     args = parser.parse_args()
+    if args.command == "refresh-statutes":
+        with tempfile.TemporaryDirectory() as cache:
+            snapshots = refresh(
+                args.sources.parent / STATUTES_DIR,
+                load_sources(args.sources),
+                Fetcher(Path(cache)).fresh,
+                datetime.now(UTC).date(),
+            )
+        for snapshot in snapshots:
+            print(
+                f"{snapshot.doc_id}: {len(snapshot.listing)} files; ILGA copy "
+                f"updated {snapshot.ilga_updated_on} through P.A. "
+                f"{snapshot.through_public_act}"
+            )
+        return
     if not 0 <= args.max_ocr_fallback_fraction <= 1:
         parser.error("--max-ocr-fallback-fraction must be between 0 and 1")
     warnings: list[str] = []

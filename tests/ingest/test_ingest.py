@@ -226,7 +226,7 @@ def test_long_sections_stable_and_bounded() -> None:
 
 def test_registry() -> None:
     sources = load_sources(ROOT / "sources.yaml")
-    assert len(sources) == 25
+    assert len(sources) == 27
     assert all(s.authority for s in sources)
     excluded = [s for s in sources if s.exclude]
     assert [s.doc_id for s in excluded] == ["email-answers"]
