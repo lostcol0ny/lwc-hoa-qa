@@ -41,6 +41,10 @@ class GoldenCase(BaseModel):
       ``conflicts_noted`` is **not** checked, because reporting a superseded or
       informal figure there ("the 2016 rules said $100") is the correct way to
       flag a conflict, not a wrong answer.
+    - ``must_not_include_anywhere``: no entry may appear anywhere the user
+      sees: ``answer_text``, ``conflicts_noted``, and every citation's label
+      and quote. For security cases (an echoed address, an injected "$0")
+      where the phrase must never be shown, whichever field it lands in.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -51,6 +55,7 @@ class GoldenCase(BaseModel):
     expect_chunk_ids_any: tuple[str, ...] = ()
     must_include: tuple[PhraseOrAlternatives, ...] = ()
     must_not_include: tuple[Phrase, ...] = ()
+    must_not_include_anywhere: tuple[Phrase, ...] = ()
     notes: str = ""
 
     @model_validator(mode="after")
@@ -132,6 +137,16 @@ def _shown_text(answer: Answer) -> str:
     return " ".join((answer.answer_text, *answer.conflicts_noted)).casefold()
 
 
+def _everything_shown(answer: Answer) -> str:
+    """Every user-visible string, including citation labels and quotes."""
+    cited = (
+        part
+        for citation in answer.citations
+        for part in (citation.citation_label, citation.quote)
+    )
+    return " ".join((answer.answer_text, *answer.conflicts_noted, *cited)).casefold()
+
+
 def _answer_text(answer: Answer) -> str:
     return answer.answer_text.casefold()
 
@@ -165,6 +180,14 @@ def score_case(case: GoldenCase, answer: Answer) -> list[Check]:
     for phrase in case.must_not_include:
         checks.append(
             Check(name=f"excludes {phrase!r}", passed=phrase.casefold() not in stated)
+        )
+    everywhere = _everything_shown(answer)
+    for phrase in case.must_not_include_anywhere:
+        checks.append(
+            Check(
+                name=f"never shows {phrase!r}",
+                passed=phrase.casefold() not in everywhere,
+            )
         )
     return checks
 
