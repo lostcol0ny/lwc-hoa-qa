@@ -36,6 +36,8 @@ dev = [
     "pyright",
     "pytest",
     "pre-commit",
+    # Runs the budget's Redis Lua script in tests (tests/web/web_fakes.py).
+    "lupa>=2.8,<3",
 ]
 
 [tool.ruff]
@@ -50,6 +52,8 @@ pythonVersion = "3.12"
 typeCheckingMode = "standard"
 include = ["src", "tests"]
 venvPath = "."
+# Test helper modules imported by bare name (see tests/integration/conftest.py).
+extraPaths = ["tests/qa", "tests/web"]
 venv = ".venv"
 
 [tool.pytest.ini_options]
