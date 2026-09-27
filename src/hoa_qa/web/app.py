@@ -1,4 +1,4 @@
-"""The FastAPI app: ``POST /api/ask`` and ``GET /api/health``.
+"""The FastAPI app: ``POST /api/ask``, ``GET /api/health`` and ``GET /documents``.
 
 Run locally with ``uv run uvicorn hoa_qa.web.app:app --reload``. On Vercel,
 ``api/index.py`` re-exports ``app``.
@@ -19,7 +19,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
@@ -30,7 +30,7 @@ from hoa_qa.budget import (
     select_budget_store,
     select_counter_store,
 )
-from hoa_qa.models import Answer, Outcome
+from hoa_qa.models import Answer, Outcome, validate_https
 from hoa_qa.web.deps import (
     Asker,
     ServiceUnavailable,
@@ -44,6 +44,7 @@ from hoa_qa.web.deps import (
 from hoa_qa.web.ratelimit import RateLimiter, client_ip
 from hoa_qa.web.security import SecurityHeadersMiddleware, origin_allowed
 from hoa_qa.web.settings import (
+    DEFAULT_DOCUMENTS_URL,
     DISCLAIMER,
     REPO_ROOT,
     WebSettings,
@@ -283,12 +284,29 @@ def create_app(
             }
         )
 
+    @app.get("/documents", include_in_schema=False)
+    async def documents(
+        settings: Annotated[WebSettings, Depends(get_settings)],
+    ) -> RedirectResponse:
+        # A same-origin link to the HOA documents that works without JS. The
+        # budget and rate limit are /api/ask dependencies, so they never apply.
+        return RedirectResponse(safe_documents_url(settings.documents_url), 307)
+
     # On Vercel, public/ is served by the CDN (Vercel says not to mount it).
     # Locally, serve it from the app so one uvicorn process runs everything.
     if not config.on_vercel and public_dir.is_dir():
         app.mount("/", StaticFiles(directory=public_dir, html=True), name="public")
 
     return app
+
+
+def safe_documents_url(url: str) -> str:
+    """The configured documents URL if it's https without userinfo, else the default."""
+    try:
+        return validate_https(url)
+    except ValueError:
+        logger.error("documents_url invalid; redirecting to the default")
+        return DEFAULT_DOCUMENTS_URL
 
 
 def reservation_amount(settings: WebSettings, asker: object) -> float:
