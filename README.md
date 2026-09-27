@@ -102,7 +102,7 @@ default".
 | `ANTHROPIC_API_KEY` | (required) | QA core; ingest with LLM cleanup | Answer model; optional OCR cleanup |
 | `ANSWER_MODEL` | `claude-haiku-4-5` | QA core | Anthropic model for the answer step |
 | `ANSWER_MAX_TOKENS` | `2048` | QA core | Output cap per answer call (256–16000); part of `max_cost_usd` |
-| `JEV_MODEL` | `jev-latest` | QA core | Pin a version once thresholds are tuned |
+| `JEV_MODEL` | `jev-1.13.0` | QA core | Pinned Jev version the thresholds were tuned against. Bumping it (or using an alias like `jev-latest`) needs a re-run of the eval and re-tuning |
 | `GATE_THRESHOLD` | `0.5` | QA core | Minimum on-topic probability |
 | `SWEEP_THRESHOLD` | `0.3` | QA core | Minimum chunk relevance |
 | `SWEEP_TOP_K` | `8` | QA core | Maximum passages sent to the answer model |
@@ -177,8 +177,9 @@ Do these in order.
    checks, answers, total cost, and per-case diagnostics: gate and sweep
    scores, passages sent, and why each draft claim was kept or dropped; see
    docs/qa-core.md "Eval diagnostics"). Tune `GATE_THRESHOLD`, `SWEEP_THRESHOLD`,
-   `SUPPORT_THRESHOLD` or `SWEEP_TOP_K` until it passes (default bar 85%), then
-   pin `JEV_MODEL`.
+   `SUPPORT_THRESHOLD` or `SWEEP_TOP_K` if it falls below the bar (default
+   85%). `JEV_MODEL` is pinned to `jev-1.13.0`, the version the defaults were
+   tuned against; re-run this eval and re-tune before changing it.
 4. Set provider-side spend limits in the Anthropic console (and at TypeSafe if
    it offers them).
 5. Create the Vercel project (turn off automatic Git deployments) and add

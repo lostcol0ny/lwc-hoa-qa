@@ -49,7 +49,8 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 - Model output that breaks a cap is salvaged when nothing essential is lost:
   citations past 3 are cut, and malformed, over-long, or surplus
   non-essential claims are dropped (never shown). Otherwise the draft is
-  invalid, as before.
+  invalid, as before. Dropped claims set `ProviderResult.claims_trimmed`, so
+  the answer carries `OMITTED_NOTE` as for any other dropped claim.
 - The pipeline never returns `answered` with zero citations: every surviving
   claim has at least one quote-checked citation.
 
@@ -67,12 +68,19 @@ say $50. So the authority order is also enforced in code (`ask.py`,
   (a claim can't borrow support from the blog by also citing the Rules) and
   are not shown. A claim left with no citation fails as `low_authority`, and
   the retry explains the rule.
-- `conflict` claims are exempt: reporting what an informal or superseded
-  source says, in `conflicts_noted`, is what they are for.
+- `conflict` claims keep their low-authority citations: reporting what an
+  informal or superseded source says, in `conflicts_noted`, is what they are
+  for. But a conflict claim citing such a source must not present it as
+  current, or it fails as `informal_as_current` (a failed conflict claim is
+  dropped, never blocking the answer).
 - Without an authoritative passage, an informal-only `answer` claim may stand
   (the prompt makes the model label it informal), unless it presents itself
-  as current ("current", "currently", "in effect", "now in force"), which
-  fails as `informal_as_current`.
+  as current, which fails as `informal_as_current`.
+- "Presents as current" (`presents_as_current`) means any of "current",
+  "currently", "in effect", "in force", "as of now", "presently", "at
+  present", "today", "now", except negated or past uses ("no longer in
+  effect", "not the current", "was in force") and "now" followed by an
+  outdated word ("now superseded").
 - `website` (the Board-run site: the dues banner, the FAQ, About) and `form`
   are official HOA publications and are **not** low-authority. The dues
   banner is the only source for the current assessment, and the FAQ answers
@@ -115,7 +123,7 @@ for it, and the golden questions are committed fixtures, not user input.
 | `TYPESAFE_API_KEY` | (required) | Jev API key |
 | `ANTHROPIC_API_KEY` | (required) | Answer-model API key |
 | `ANSWER_MODEL` | `claude-haiku-4-5` | Anthropic model ID for step 4 |
-| `JEV_MODEL` | `jev-latest` | Jev model; pin a version (e.g. `jev-1.13.0`) once thresholds are tuned against it |
+| `JEV_MODEL` | `jev-1.13.0` | Pinned Jev version. `GATE_THRESHOLD`, `SWEEP_THRESHOLD` and `SUPPORT_THRESHOLD` were tuned against it (live eval runs 1–5, 2026-09-27, when the `jev-latest` alias pointed to `jev-1.13.0` per docs.typesafe.ai/models). Aliases move when TypeSafe ships a release, so don't use one here; to bump the version, re-run the **Eval** workflow and re-tune the thresholds first. |
 | `GATE_THRESHOLD` | `0.5` | Minimum on-topic probability |
 | `SWEEP_THRESHOLD` | `0.3` | Minimum relevance probability for a chunk |
 | `SWEEP_TOP_K` | `8` | Maximum passages sent to the answer model |

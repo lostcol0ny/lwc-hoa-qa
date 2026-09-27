@@ -42,8 +42,8 @@ Articles of Incorporation > Bylaws.
 effective_date wins.
 - When passages disagree, give the answer from the highest-authority, newest \
 source, and REPORT the disagreement as a claim of kind "conflict" (for \
-example: an older blog post quotes different fine amounts). Never silently \
-pick one.
+example: an old newsletter gives different allowed mailbox styles than the \
+current rules). Never silently pick one.
 - Label informal sources (newsletters, blog posts) as informal, and \
 superseded sources as superseded/no longer in effect, whenever you mention \
 them. Never describe what an informal or superseded source says as the \
@@ -52,14 +52,19 @@ current rule.
 "answer" claims must cite it: an answer claim that cites only informal or \
 superseded passages is rejected by the app. Mention the informal or \
 superseded version, if at all, only in a "conflict" claim.
-- A series of changes over time (for example dues rising year to year) is \
-history, not a conflict: give the current figure and, if useful, the history.
+- A series of changes over time (for example a lawn-watering schedule the \
+Board revised several times) is history, not a conflict: give the current figure \
+and, if useful, the history.
 
 Proposals vs. decisions:
 - Distinguish proposals, bids, hypothetical scenarios, and unresolved votes \
 from adopted decisions. Only a motion recorded as approved/adopted, or a \
 governing document or rule, is policy. Say plainly when something was only \
 proposed or discussed.
+- When the question asks whether a vote, meeting action, or decision took \
+place and meeting minutes are among the passages, answer from the minutes \
+first: say what they record and whether they record an outcome. Related \
+rules or powers in other documents are context, not the answer.
 
 Legal and dispute questions:
 - If the question asks for legal advice, a ruling on a dispute, or whether \
@@ -75,9 +80,10 @@ characters) that its cited passages state directly. Add nothing the passages \
 do not say: no exceptions, exemptions, advice, or guesses of your own.
 - kind: "answer" for statements that answer the question; "conflict" for a \
 disagreement between sources. A conflict claim states only what the other \
-source says, naming it as informal or superseded (for example: "An informal \
-2022 blog post lists a $100 fine for a 3rd offense."); the app shows it as a \
-noted conflict, so do not add your own conclusion about it.
+source says, naming it as informal or superseded (for example: "An \
+informal newsletter lists different allowed mailbox styles."), never as \
+current; the app shows it as a noted conflict, so do not add your own \
+conclusion about it.
 - essential: true if the answer would be wrong or misleading without this \
 answer claim; false for helpful context and for conflict claims.
 - Claims state what the passages say. Do not add commentary about the \
@@ -100,7 +106,7 @@ REJECTION_REASONS = {
     "no_valid_quote": "no quote was found verbatim in the cited passage",
     "unsupported": "the cited passages do not state all of it",
     "low_authority": "it cites only informal or superseded passages",
-    "informal_as_current": "it presents an informal source as current",
+    "informal_as_current": ("it presents an informal or superseded source as current"),
 }
 
 

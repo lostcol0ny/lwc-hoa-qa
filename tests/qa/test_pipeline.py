@@ -413,3 +413,22 @@ def test_retry_says_why_each_claim_was_rejected(
         in retry
     )
     assert f"{INVENTED.statement} (the cited passages do not state all of it)" in retry
+
+
+def test_claims_dropped_by_salvage_add_the_omitted_note(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    provider = FakeProvider([FINES_DRAFT], trimmed=[True])
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
+    untrimmed = ask(make_asker(corpus, settings, jev, FakeProvider([FINES_DRAFT])))
+    assert untrimmed.answer.answer_text == FINE_CLAIM.statement
+
+
+def test_jev_model_defaults_to_a_pinned_version() -> None:
+    """Thresholds are tuned against one Jev version; an alias can move."""
+    model = QASettings().jev_model
+    assert model == "jev-1.13.0"
+    assert not model.endswith(("-latest", "-preview"))
+    assert QASettings.from_env({"JEV_MODEL": "jev-1.14.0"}).jev_model == "jev-1.14.0"
