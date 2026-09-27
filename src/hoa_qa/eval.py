@@ -8,23 +8,30 @@ prints a pass/fail table and the total cost, and fails below a minimum pass
 rate.
 
 The golden questions are committed fixtures, not user input, so the JSON
-report includes the answers for review. Nothing here logs question or answer
-text.
+report includes the answers for review, and, when the asker supports
+``ask_traced``, per-case diagnostics (gate score, top sweep scores, passages
+sent, and every draft claim's verification). Diagnostics are always on in the
+eval because the manual workflow has no switch for them; the production asker
+never records them. Nothing here logs question or answer text.
 """
 
 import json
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from hoa_qa.ask import Asker
-from hoa_qa.models import Answer, Corpus, Outcome
+from hoa_qa.ask import Asker, AskResult
+from hoa_qa.models import Answer, Chunk, Corpus, Outcome
+from hoa_qa.retrieval.sweep import ScoredChunk
+from hoa_qa.trace import AskTrace, ClaimTrace
 
 DEFAULT_GOLDEN_PATH = Path("evals/golden.yaml")
 DEFAULT_IDS_PATH = Path("evals/corpus_ids.txt")
 DEFAULT_MIN_PASS = 0.85
+# How many of the best sweep scores the diagnostics keep per case.
+DIAGNOSTIC_TOP_N = 20
 
 Phrase = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 PhraseOrAlternatives = Phrase | Annotated[list[Phrase], Field(min_length=1)]
@@ -108,6 +115,104 @@ def write_ids(corpus: Corpus, path: Path) -> None:
     path.write_text("".join(f"{chunk.id}\n" for chunk in corpus.chunks))
 
 
+class ScoreDiag(BaseModel):
+    chunk_id: str
+    score: float
+    authority: str
+    selected: bool
+
+
+class CitationDiag(BaseModel):
+    chunk_id: str
+    authority: str | None
+    quote_ok: bool
+    used: bool
+
+
+class ClaimDiag(BaseModel):
+    statement: str
+    kind: str
+    essential: bool
+    citations: list[CitationDiag]
+    support: float | None
+    kept: bool
+    reason: str
+
+
+class AttemptDiag(BaseModel):
+    attempt: int
+    valid: bool
+    claims: list[ClaimDiag]
+
+
+class CaseDiagnostics(BaseModel):
+    gate_score: float | None = None
+    gate_passed: bool | None = None
+    sweep_top: list[ScoreDiag] = Field(default_factory=list)
+    selected: list[str] = Field(default_factory=list)
+    passages: list[str] = Field(default_factory=list)
+    attempts: list[AttemptDiag] = Field(default_factory=list)
+
+
+class DiagnosticsRecorder:
+    """An ``AskTrace`` that fills a ``CaseDiagnostics`` for one question."""
+
+    def __init__(self, top_n: int = DIAGNOSTIC_TOP_N) -> None:
+        self.top_n = top_n
+        self.data = CaseDiagnostics()
+
+    def gate(self, probability: float, passed: bool) -> None:
+        self.data.gate_score = probability
+        self.data.gate_passed = passed
+
+    def sweep(
+        self, scores: Sequence[ScoredChunk], selected: Sequence[ScoredChunk]
+    ) -> None:
+        chosen = {s.chunk.id for s in selected}
+        self.data.selected = [s.chunk.id for s in selected]
+        self.data.sweep_top = [
+            ScoreDiag(
+                chunk_id=s.chunk.id,
+                score=round(s.probability, 4),
+                authority=s.chunk.authority.value,
+                selected=s.chunk.id in chosen,
+            )
+            for s in scores[: self.top_n]
+        ]
+
+    def passages(self, chunks: Sequence[Chunk]) -> None:
+        self.data.passages = [chunk.id for chunk in chunks]
+
+    def attempt(self, number: int, claims: Sequence[ClaimTrace] | None) -> None:
+        self.data.attempts.append(
+            AttemptDiag(
+                attempt=number,
+                valid=claims is not None,
+                claims=[_claim_diag(c) for c in claims or ()],
+            )
+        )
+
+
+def _claim_diag(claim: ClaimTrace) -> ClaimDiag:
+    return ClaimDiag(
+        statement=claim.statement,
+        kind=claim.kind,
+        essential=claim.essential,
+        citations=[
+            CitationDiag(
+                chunk_id=c.chunk_id,
+                authority=c.authority.value if c.authority else None,
+                quote_ok=c.quote_ok,
+                used=c.used,
+            )
+            for c in claim.citations
+        ],
+        support=None if claim.support is None else round(claim.support, 4),
+        kept=claim.kept,
+        reason=claim.reason,
+    )
+
+
 class Check(BaseModel):
     name: str
     passed: bool
@@ -122,6 +227,7 @@ class CaseResult(BaseModel):
     cost_usd: float
     answer_text: str
     conflicts_noted: list[str]
+    diagnostics: CaseDiagnostics | None = None
 
 
 class EvalReport(BaseModel):
@@ -196,8 +302,16 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
     """Run every case sequentially (keeps the API rate and spend modest)."""
     results: list[CaseResult] = []
     total_cost = 0.0
+    traced: Callable[[str, AskTrace], Awaitable[AskResult]] | None = getattr(
+        asker, "ask_traced", None
+    )
     for case in golden.cases:
-        result = await asker(case.question)
+        recorder: DiagnosticsRecorder | None = None
+        if traced is not None:
+            recorder = DiagnosticsRecorder()
+            result = await traced(case.question, recorder)
+        else:
+            result = await asker(case.question)
         answer = result.answer
         checks = score_case(case, answer)
         total_cost += result.estimated_cost_usd
@@ -211,6 +325,7 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
                 cost_usd=result.estimated_cost_usd,
                 answer_text=answer.answer_text,
                 conflicts_noted=list(answer.conflicts_noted),
+                diagnostics=recorder.data if recorder else None,
             )
         )
     passed = sum(r.passed for r in results)

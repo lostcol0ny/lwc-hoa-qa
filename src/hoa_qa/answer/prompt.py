@@ -46,7 +46,12 @@ example: an older blog post quotes different fine amounts). Never silently \
 pick one.
 - Label informal sources (newsletters, blog posts) as informal, and \
 superseded sources as superseded/no longer in effect, whenever you mention \
-them.
+them. Never describe what an informal or superseded source says as the \
+current rule.
+- When a governing, rules, or board_decision passage covers the question, \
+"answer" claims must cite it: an answer claim that cites only informal or \
+superseded passages is rejected by the app. Mention the informal or \
+superseded version, if at all, only in a "conflict" claim.
 - A series of changes over time (for example dues rising year to year) is \
 history, not a conflict: give the current figure and, if useful, the history.
 
@@ -83,6 +88,13 @@ questions; do not write the referral yourself.
 - If the passages do not answer the question, return no claims and set \
 confidence to 0.
 """
+
+AUTHORITY_FEEDBACK = (
+    "Some rejected claims cited only informal or superseded passages although "
+    "governing, rules, or board_decision passages were provided. Answer from "
+    "those higher-authority passages; report an informal or superseded source "
+    'only as a "conflict" claim.'
+)
 
 RETRY_FEEDBACK = (
     "Your previous answer was rejected. Each quote must be copied exactly from "
@@ -134,8 +146,13 @@ def build_prompt(
     passages: Sequence[Chunk],
     *,
     failed_claims: Sequence[str] | None = None,
+    authority_note: bool = False,
 ) -> AnswerPrompt:
-    """Build the prompt; ``failed_claims`` (possibly empty) marks a retry."""
+    """Build the prompt; ``failed_claims`` (possibly empty) marks a retry.
+
+    ``authority_note`` adds AUTHORITY_FEEDBACK to a retry whose rejected
+    claims broke the authority rule.
+    """
     body = "\n".join(render_passage(chunk) for chunk in passages)
     user = (
         "<passages>\n"
@@ -147,6 +164,8 @@ def build_prompt(
     )
     if failed_claims is not None:
         user += f"\n\n{RETRY_FEEDBACK}"
+        if authority_note:
+            user += f"\n{AUTHORITY_FEEDBACK}"
         if failed_claims:
             listed = "\n".join(f"- {defang(claim)}" for claim in failed_claims)
             user += (

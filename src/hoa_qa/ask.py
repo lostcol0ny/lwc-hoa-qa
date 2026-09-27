@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import unicodedata
 import uuid
@@ -33,8 +34,17 @@ from hoa_qa.answer.provider import (
     AnswerDraft,
     AnswerProvider,
     AnthropicAnswerProvider,
+    DraftClaim,
 )
-from hoa_qa.models import Answer, Chunk, Citation, Corpus, Outcome, citation_url
+from hoa_qa.models import (
+    Answer,
+    Authority,
+    Chunk,
+    Citation,
+    Corpus,
+    Outcome,
+    citation_url,
+)
 from hoa_qa.retrieval.gate import GATE_QUESTION, run_gate
 from hoa_qa.retrieval.jev import (
     DEFAULT_LIMITS,
@@ -54,6 +64,7 @@ from hoa_qa.retrieval.sweep import (
     plan_passages,
     sweep,
 )
+from hoa_qa.trace import NO_TRACE, AskTrace, CitationTrace, ClaimTrace
 from hoa_qa.verify.quotes import CheckedCitation, check_quotes, normalize
 from hoa_qa.verify.support import ClaimEvidence, check_support, support_request
 
@@ -73,6 +84,24 @@ BOARD_REFERRAL = (
 )
 OMITTED_NOTE = (
     "Some details could not be verified against the documents and were left out."
+)
+
+# Authority rule (docs/qa-core.md, "Source authority"): support is not
+# authority. When any provided passage is AUTHORITATIVE, an answer claim is
+# judged only on its citations outside LOW_AUTHORITY, and a claim left with
+# none fails verification ("low_authority"): an informal blog quoting an old
+# fine schedule can never be stated as fact next to the current Rules. The
+# model may still report such a source as a "conflict" claim, which is shown
+# in conflicts_noted. Without an authoritative passage, a low-authority-only
+# answer claim may stand, unless it presents itself as current.
+# `website` (the Board-run site, including the FAQ and the dues banner) and
+# `form` are official HOA publications and are not LOW_AUTHORITY.
+AUTHORITATIVE = frozenset(
+    {Authority.governing, Authority.rules, Authority.board_decision}
+)
+LOW_AUTHORITY = frozenset({Authority.informal, Authority.superseded})
+_PRESENTS_AS_CURRENT = re.compile(
+    r"\b(current|currently|in effect|now in force)\b", re.IGNORECASE
 )
 
 # Framing the Messages API adds beyond the prompt text and the output schema
@@ -182,6 +211,69 @@ class _Verified:
     essential: bool
     citations: tuple[CheckedCitation, ...]
     ok: bool
+    reason: str  # "ok", or why the claim failed
+    trace: ClaimTrace
+
+
+_AUTHORITY_REASONS = frozenset({"low_authority", "informal_as_current"})
+
+
+def _authority_screen(
+    claim: DraftClaim,
+    citations: tuple[CheckedCitation, ...],
+    *,
+    authoritative: bool,
+) -> tuple[tuple[CheckedCitation, ...], str | None]:
+    """Apply the authority rule: the citations an answer claim may rest on.
+
+    Returns the usable citations and, if the rule rejects the claim, why.
+    Conflict claims are exempt: reporting what an older or informal source
+    says is exactly what they are for.
+    """
+    if claim.kind != "answer" or not citations:
+        return citations, None
+    strong = tuple(c for c in citations if c.chunk.authority not in LOW_AUTHORITY)
+    if strong:
+        # Next to an authoritative passage, only official sources count.
+        return (strong if authoritative else citations), None
+    if authoritative:
+        return (), "low_authority"
+    if _PRESENTS_AS_CURRENT.search(claim.statement):
+        return (), "informal_as_current"
+    return citations, None
+
+
+def _claim_trace(
+    claim: DraftClaim,
+    by_id: Mapping[str, Chunk],
+    usable: Sequence[CheckedCitation],
+    probability: float | None,
+    *,
+    ok: bool,
+    reason: str,
+) -> ClaimTrace:
+    used = {(c.chunk.id, normalize(c.quote)) for c in usable}
+    citations = []
+    for citation in claim.citations:
+        chunk = by_id.get(citation.chunk_id)
+        quote = normalize(citation.quote)
+        citations.append(
+            CitationTrace(
+                chunk_id=citation.chunk_id,
+                authority=chunk.authority if chunk else None,
+                quote_ok=bool(chunk and quote and quote in normalize(chunk.text_clean)),
+                used=(citation.chunk_id, quote) in used,
+            )
+        )
+    return ClaimTrace(
+        statement=claim.statement,
+        kind=claim.kind,
+        essential=claim.essential,
+        citations=tuple(citations),
+        support=probability,
+        kept=ok,
+        reason=reason,
+    )
 
 
 _Result = tuple[Outcome, str, tuple[Citation, ...], float | None, tuple[str, ...]]
@@ -218,12 +310,16 @@ class QAAsker:
         return self._max_cost_usd
 
     async def __call__(self, question: str) -> AskResult:
+        return await self.ask_traced(question, NO_TRACE)
+
+    async def ask_traced(self, question: str, trace: AskTrace) -> AskResult:
+        """``__call__`` reporting each stage to ``trace`` (eval diagnostics only)."""
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         usage = _Usage(model=self._provider.model)
         try:
             outcome, text, citations, confidence, conflicts = await self._run(
-                question, usage
+                question, usage, trace
             )
         except Exception as exc:  # any provider failure becomes an error outcome
             if isinstance(exc, PartialCostError):
@@ -265,7 +361,7 @@ class QAAsker:
         _log_result(result, usage)
         return result
 
-    async def _run(self, question: str, usage: _Usage) -> _Result:
+    async def _run(self, question: str, usage: _Usage, trace: AskTrace) -> _Result:
         s = self._settings
         cleaned = clean_question(question)
         if cleaned is None:
@@ -282,6 +378,7 @@ class QAAsker:
         limit = asyncio.Semaphore(s.jev_concurrency)
         gate = await run_gate(self._jev, cleaned, s.gate_threshold)
         usage.jev_input_tokens += gate.input_tokens
+        trace.gate(gate.probability, gate.passed)
         if not gate.passed:
             return (
                 Outcome.refused_off_topic,
@@ -304,14 +401,22 @@ class QAAsker:
             limits=self._limits,
         )
         usage.jev_input_tokens += swept.input_tokens
+        trace.sweep(swept.scores, swept.selected)
         if not swept.selected:
             return self._not_found()
 
         passages = [scored.chunk for scored in swept.selected]
+        trace.passages(passages)
         failed: list[str] | None = None
+        authority_failed = False
         for attempt in range(2):
             generated = await self._provider.generate(
-                build_prompt(cleaned, passages, failed_claims=failed)
+                build_prompt(
+                    cleaned,
+                    passages,
+                    failed_claims=failed,
+                    authority_note=authority_failed,
+                )
             )
             usage.answer_calls += 1
             usage.answer_input_tokens += generated.input_tokens
@@ -319,13 +424,16 @@ class QAAsker:
             draft = generated.draft
             if draft is None:
                 usage.notes.append("invalid_draft")
+                trace.attempt(attempt + 1, None)
                 failed = []
                 continue
             if not draft.claims:
                 # The model found nothing to say; regenerating would not help.
                 usage.notes.append("no_claims")
+                trace.attempt(attempt + 1, [])
                 return self._not_found()
             verified = await self._verify(draft, passages, limit, usage)
+            trace.attempt(attempt + 1, [v.trace for v in verified])
             failures = [v for v in verified if not v.ok]
             if not failures and _has_answer(verified):
                 return self._answered(draft, verified, dropped=False)
@@ -337,6 +445,7 @@ class QAAsker:
                     return self._not_found()
                 return self._answered(draft, verified, dropped=True)
             failed = [v.statement for v in failures]
+            authority_failed = any(v.reason in _AUTHORITY_REASONS for v in failures)
         return self._not_found()
 
     async def _verify(
@@ -347,13 +456,17 @@ class QAAsker:
         usage: _Usage,
     ) -> list[_Verified]:
         by_id = {chunk.id: chunk for chunk in passages}
-        evidence = [
-            ClaimEvidence(
-                statement=claim.statement,
-                citations=tuple(check_quotes(claim.citations, by_id)),
-            )
-            for claim in draft.claims
+        authoritative = any(chunk.authority in AUTHORITATIVE for chunk in passages)
+        checked = [tuple(check_quotes(c.citations, by_id)) for c in draft.claims]
+        screened = [
+            _authority_screen(claim, cites, authoritative=authoritative)
+            for claim, cites in zip(draft.claims, checked, strict=True)
         ]
+        evidence = [
+            ClaimEvidence(statement=claim.statement, citations=usable)
+            for claim, (usable, _) in zip(draft.claims, screened, strict=True)
+        ]
+        # A claim with no usable citation is not sent and fails closed.
         support = await check_support(
             self._jev,
             evidence,
@@ -363,18 +476,39 @@ class QAAsker:
             limits=self._limits,
         )
         usage.jev_input_tokens += support.input_tokens
-        return [
-            _Verified(
-                statement=claim.statement,
-                kind=claim.kind,
-                essential=claim.essential,
-                citations=ev.citations,
-                ok=bool(ev.citations) and ok,
+        probabilities = support.probabilities or (None,) * len(draft.claims)
+        verified: list[_Verified] = []
+        for claim, cites, (usable, screen_reason), ok, probability in zip(
+            draft.claims,
+            checked,
+            screened,
+            support.supported,
+            probabilities,
+            strict=True,
+        ):
+            ok = bool(usable) and ok
+            if not cites:
+                reason = "no_valid_quote"
+            elif screen_reason is not None:
+                reason = screen_reason
+            elif not ok:
+                reason = "unsupported"
+            else:
+                reason = "ok"
+            verified.append(
+                _Verified(
+                    statement=claim.statement,
+                    kind=claim.kind,
+                    essential=claim.essential,
+                    citations=usable,
+                    ok=ok,
+                    reason=reason,
+                    trace=_claim_trace(
+                        claim, by_id, usable, probability, ok=ok, reason=reason
+                    ),
+                )
             )
-            for claim, ev, ok in zip(
-                draft.claims, evidence, support.supported, strict=True
-            )
-        ]
+        return verified
 
     def _answered(
         self, draft: AnswerDraft, verified: Sequence[_Verified], *, dropped: bool
@@ -480,6 +614,7 @@ def max_cost_usd(
         WORST_QUESTION,
         biggest[: settings.sweep_top_k],
         failed_claims=[worst_statement] * MAX_CLAIMS,
+        authority_note=True,
     )
     answer_input = (
         len((prompt.system + prompt.user).encode("utf-8"))

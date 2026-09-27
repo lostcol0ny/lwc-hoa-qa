@@ -441,3 +441,42 @@ def test_runner_with_the_real_asker_and_fake_providers(tmp_path: Path) -> None:
     assert code == 0, report
     assert report["cases"][0]["cited"] == ["rules-2023-fines"]
     assert 0 < report["total_cost_usd"] <= report["max_cost_usd"]
+
+
+def test_runner_records_diagnostics_for_traceable_askers(tmp_path: Path) -> None:
+    """The real asker gets a recorder per case; the JSON carries diagnostics."""
+    corpus = load_corpus(FIXTURE)
+    jev = FakeJev(
+        relevance={"rules-2023-fines": 0.9, "rules-2016-fines": 0.7},
+        text_to_id={c.text_clean: c.id for c in corpus.chunks},
+    )
+    asker = build_asker(
+        corpus, QASettings(), jev=jev, provider=FakeProvider([FINES_DRAFT])
+    )
+    golden = write_golden(tmp_path / "golden.yaml", [FINE_CASE])
+    out = tmp_path / "out.json"
+    code = main(
+        ["eval", str(golden), "--corpus", str(FIXTURE), "--json", str(out)],
+        asker_factory=lambda corpus, settings: asker,
+    )
+    assert code == 0
+    [case] = json.loads(out.read_text())["cases"]
+    diag = case["diagnostics"]
+    assert diag["gate_score"] == 0.95
+    assert diag["sweep_top"][0] == {
+        "chunk_id": "rules-2023-fines",
+        "score": 0.9,
+        "authority": "rules",
+        "selected": True,
+    }
+    assert diag["passages"] == ["rules-2023-fines", "rules-2016-fines"]
+    [attempt] = diag["attempts"]
+    assert attempt["claims"][0]["reason"] == "ok"
+
+
+def test_runner_without_trace_support_has_no_diagnostics(tmp_path: Path) -> None:
+    asker = ScriptedAsker(
+        {POEM_CASE["question"]: answer(Outcome.refused_off_topic, "No.")}
+    )
+    _, report = run_cli(tmp_path, [POEM_CASE], asker)
+    assert report is not None and report["cases"][0]["diagnostics"] is None

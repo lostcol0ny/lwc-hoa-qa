@@ -40,6 +40,8 @@ class SupportResult:
     supported: tuple[bool, ...]  # one per claim, in input order
     input_tokens: int
     requests: int
+    # The judged probability per claim; None where no request was made.
+    probabilities: tuple[float | None, ...] = ()
 
 
 def _passages(evidence: ClaimEvidence) -> list[str]:
@@ -102,11 +104,15 @@ async def check_support(
         jev, [support_request([c for _, c in group]) for group in groups], limit
     )
     supported = [False] * len(claims)
+    probabilities: list[float | None] = [None] * len(claims)
     for group, result in zip(groups, results, strict=True):
         for position, (index, _) in enumerate(group):
-            supported[index] = result.probabilities[f"c{position}"] >= threshold
+            p = result.probabilities[f"c{position}"]
+            probabilities[index] = p
+            supported[index] = p >= threshold
     return SupportResult(
         supported=tuple(supported),
         input_tokens=sum(r.input_tokens for r in results),
         requests=len(groups),
+        probabilities=tuple(probabilities),
     )

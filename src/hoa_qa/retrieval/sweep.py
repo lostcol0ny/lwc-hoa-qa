@@ -55,6 +55,8 @@ class SweepResult:
     selected: tuple[ScoredChunk, ...]
     input_tokens: int
     requests: int
+    # Every judged chunk, best first (for eval diagnostics).
+    scores: tuple[ScoredChunk, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -225,15 +227,13 @@ async def sweep(
     for passage in passages:
         order.setdefault(passage.chunk.id, len(order))
         by_id[passage.chunk.id] = passage.chunk
-    passing = [
-        ScoredChunk(by_id[chunk_id], p)
-        for chunk_id, p in best.items()
-        if p >= threshold
-    ]
+    scores = [ScoredChunk(by_id[chunk_id], p) for chunk_id, p in best.items()]
     # Highest probability first; corpus order breaks ties deterministically.
-    passing.sort(key=lambda s: (-s.probability, order[s.chunk.id]))
+    scores.sort(key=lambda s: (-s.probability, order[s.chunk.id]))
+    passing = [s for s in scores if s.probability >= threshold]
     return SweepResult(
         selected=tuple(passing[: max(0, top_k)]),
         input_tokens=sum(r.input_tokens for r in results),
         requests=len(plan.batches),
+        scores=tuple(scores),
     )
