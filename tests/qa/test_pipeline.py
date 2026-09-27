@@ -394,3 +394,22 @@ def test_failed_conflict_claim_never_blocks_a_verified_answer(
     assert answer.outcome is Outcome.answered
     assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
     assert answer.conflicts_noted == ()
+
+
+def test_retry_says_why_each_claim_was_rejected(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    fake_quote = claim(
+        "A third violation is $500.",
+        ("rules-2023-fines", "3rd violation: $500."),
+        essential=False,
+    )
+    jev.support = invented_unsupported
+    provider = FakeProvider([draft(FINE_CLAIM, fake_quote, INVENTED)] * 2)
+    ask(make_asker(corpus, settings, jev, provider))
+    retry = provider.prompts[1].user
+    assert (
+        f"{fake_quote.statement} (no quote was found verbatim in the cited passage)"
+        in retry
+    )
+    assert f"{INVENTED.statement} (the cited passages do not state all of it)" in retry

@@ -24,7 +24,9 @@ from hoa_qa.answer.prompt import (
     MAX_CITATIONS_PER_CLAIM,
     MAX_CLAIMS,
     MAX_STATEMENT_CHARS,
+    REJECTION_REASONS,
     build_prompt,
+    rejected,
     render_passage,
 )
 from hoa_qa.answer.provider import (
@@ -265,6 +267,7 @@ def _claim_trace(
         citations.append(
             CitationTrace(
                 chunk_id=citation.chunk_id,
+                quote=citation.quote,
                 authority=chunk.authority if chunk else None,
                 quote_ok=bool(chunk and quote and quote in normalize(chunk.text_clean)),
                 used=(citation.chunk_id, quote) in used,
@@ -450,7 +453,7 @@ class QAAsker:
                 if attempt == 1:
                     return self._answered(draft, verified, dropped=True)
                 fallback = (draft, verified)
-            failed = [v.statement for v in failures]
+            failed = [rejected(v.statement, v.reason) for v in failures]
             authority_failed = any(v.reason in _AUTHORITY_REASONS for v in failures)
         if fallback is not None:
             usage.notes.append("used_first_attempt")
@@ -632,10 +635,11 @@ def max_cost_usd(
     biggest = sorted(
         chunks, key=lambda c: len(render_passage(c).encode("utf-8")), reverse=True
     )
+    longest_reason = max(REJECTION_REASONS, key=lambda r: len(REJECTION_REASONS[r]))
     prompt = build_prompt(
         WORST_QUESTION,
         biggest[: settings.sweep_top_k],
-        failed_claims=[worst_statement] * MAX_CLAIMS,
+        failed_claims=[rejected(worst_statement, longest_reason)] * MAX_CLAIMS,
         authority_note=True,
     )
     answer_input = (

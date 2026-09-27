@@ -124,6 +124,7 @@ class ScoreDiag(BaseModel):
 
 class CitationDiag(BaseModel):
     chunk_id: str
+    quote: str
     authority: str | None
     quote_ok: bool
     used: bool
@@ -208,6 +209,7 @@ def _claim_diag(claim: ClaimTrace) -> ClaimDiag:
         citations=[
             CitationDiag(
                 chunk_id=c.chunk_id,
+                quote=c.quote,
                 authority=c.authority.value if c.authority else None,
                 quote_ok=c.quote_ok,
                 used=c.used,

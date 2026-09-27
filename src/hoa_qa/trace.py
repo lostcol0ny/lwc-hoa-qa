@@ -19,6 +19,7 @@ from hoa_qa.retrieval.sweep import ScoredChunk
 @dataclass(frozen=True)
 class CitationTrace:
     chunk_id: str
+    quote: str
     authority: Authority | None  # None: the chunk was not a provided passage
     quote_ok: bool  # the quote was found in a provided passage
     used: bool  # passed to the support check (and shown if the claim is kept)

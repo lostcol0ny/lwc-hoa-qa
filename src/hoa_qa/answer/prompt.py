@@ -95,6 +95,21 @@ questions; do not write the referral yourself.
 confidence to 0.
 """
 
+# Why a claim was rejected, as told to the model on a retry (code-authored).
+REJECTION_REASONS = {
+    "no_valid_quote": "no quote was found verbatim in the cited passage",
+    "unsupported": "the cited passages do not state all of it",
+    "low_authority": "it cites only informal or superseded passages",
+    "informal_as_current": "it presents an informal source as current",
+}
+
+
+def rejected(statement: str, reason: str) -> str:
+    """A rejected-claims entry: the statement and why it failed."""
+    why = REJECTION_REASONS.get(reason)
+    return f"{statement} ({why})" if why else statement
+
+
 AUTHORITY_FEEDBACK = (
     "Some rejected claims cited only informal or superseded passages although "
     "governing, rules, or board_decision passages were provided. Answer from "
