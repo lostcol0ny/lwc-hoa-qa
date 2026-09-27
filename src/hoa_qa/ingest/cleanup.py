@@ -1,18 +1,23 @@
 """Build-time OCR repair, guarded in code so the model can only fix characters.
 
-Three checks, any failure keeps the raw text and logs ``manifest.ocr_fallbacks``:
+Four checks, any failure keeps the raw text and logs ``manifest.ocr_fallbacks``:
 
 1. Numbers, amounts, dates, and section references (including subsection letters
    such as ``8.2(d)(4)``) must survive as identical multisets.
 2. The text stays near-identical: character similarity >= 0.9 and the word count
-   within 3%.
-3. Word-level edits are only character repairs. No word may be inserted or
-   deleted outright (so dropping "not" or adding "only" fails even in a long
-   chunk), a replaced span may change at most two characters or a quarter of its
-   length, and a replaced span containing a protected word (number words,
-   modal/negation words) must keep exactly those words. A garbled source word may
-   still be repaired into one ("rnay" -> "may"), because the span must look like
-   the original.
+   (ignoring OCR-noise tokens) within 3%.
+3. Protected words (number words, modals, negations, quantifiers, money words)
+   must survive as an identical multiset, in the whole text and in every
+   replaced span. The check is symmetric: a protected word may not disappear
+   *or appear*, so "now" -> "not", "so" -> "no" and "all" -> "any" all fail.
+   The cost: a garbled protected word ("rnay") can't be repaired into one
+   ("may"); that chunk keeps its raw text.
+4. Word-level edits are only character repairs. No word may be inserted (so
+   adding "only" fails even in a long chunk), and the only words that may be
+   deleted are pure OCR noise: a token with no letters, digits or meaningful
+   symbols ("~", "|", "--"; not "$" or "%"), or a single letter that isn't a
+   word (anything but "a"/"I"). A replaced span may change at most two
+   characters or a quarter of its length.
 """
 
 import difflib
@@ -40,11 +45,16 @@ NUMBER_WORDS = (
     "fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty "
     "sixty seventy eighty ninety hundred thousand million half quarter"
 ).split()
-# Swapping one of these flips or weakens a rule's meaning.
+# Swapping one of these flips or weakens a rule's meaning, or changes its scope
+# (quantifiers) or an amount (money words).
 MEANING_WORDS = (
     "not no nor never none shall may must except unless without only prohibited "
-    "permitted required"
+    "permitted required all any each every some dollar dollars cent cents"
 ).split()
+# Single letters that are words, so deleting one is never "noise removal".
+SINGLE_LETTER_WORDS = frozenset({"a", "i"})
+# Symbols that change an amount or a reference if dropped ("50 %", "A & B").
+MEANINGFUL_SYMBOLS = frozenset("$%§&#@+=<>/°¢")
 PROTECTED_WORDS = re.compile(
     r"\b(" + "|".join(NUMBER_WORDS + MEANING_WORDS) + r")\b", re.IGNORECASE
 )
@@ -70,10 +80,25 @@ def protected_words(text: str) -> Counter[str]:
     return Counter(word.lower() for word in PROTECTED_WORDS.findall(text))
 
 
+def is_ocr_noise(token: str) -> bool:
+    """A token OCR invents and repair may drop: no letters or digits at all, or a
+    lone letter that isn't a word. Digits and symbols that carry meaning
+    (``$``, ``%``, ``§``, ``&``, ...) are never noise."""
+    if not any(ch.isalnum() for ch in token):
+        return not any(ch in MEANINGFUL_SYMBOLS for ch in token)
+    return (
+        len(token) == 1
+        and token.isalpha()
+        and token.lower() not in (SINGLE_LETTER_WORDS)
+    )
+
+
 def near_identical(raw: str, candidate: str) -> bool:
     """Character repair keeps the text ~identical and the word count within 3%."""
     before, after = normalize(raw), normalize(candidate)
-    words_before, words_after = len(before.split()), len(after.split())
+    # OCR noise isn't a word; dropping it (check 4) mustn't count as drift.
+    words_before = sum(not is_ocr_noise(word) for word in before.split())
+    words_after = sum(not is_ocr_noise(word) for word in after.split())
     if abs(words_after - words_before) > MAX_WORD_DRIFT * words_before:
         return False
     matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
@@ -87,8 +112,12 @@ def character_edits_only(raw: str, candidate: str) -> bool:
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             continue
+        if tag == "delete":
+            if all(is_ocr_noise(token) for token in before[i1:i2]):
+                continue  # Stray OCR marks removed.
+            return False  # A real word deleted.
         if tag != "replace":
-            return False  # A whole word inserted or deleted.
+            return False  # A whole word inserted.
         source, repaired = " ".join(before[i1:i2]), " ".join(after[j1:j2])
         chars = difflib.SequenceMatcher(
             None, source.lower(), repaired.lower(), autojunk=False
@@ -101,8 +130,8 @@ def character_edits_only(raw: str, candidate: str) -> bool:
         allowance = MAX_CHANGED_CHARS * max(len(source), len(repaired))
         if changed > max(MIN_CHANGED_ALLOWANCE, allowance):
             return False
-        kept = protected_words(source)
-        if kept and kept != protected_words(repaired):
+        # Symmetric: a protected word may neither vanish nor appear.
+        if protected_words(source) != protected_words(repaired):
             return False
     return True
 
@@ -116,6 +145,7 @@ def clean(
     if (
         not candidate.strip()
         or numeric_tokens(candidate) != numeric_tokens(raw)
+        or protected_words(candidate) != protected_words(raw)
         or not near_identical(raw, candidate)
         or not character_edits_only(raw, candidate)
     ):

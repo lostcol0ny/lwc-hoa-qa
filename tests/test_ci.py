@@ -43,3 +43,31 @@ def test_ci_security_contract(path: Path) -> None:
                 assert step["with"]["persist-credentials"] is False
                 if name == "secrets":
                     assert step["with"]["fetch-depth"] == 0
+
+
+def load_workflow(name: str) -> dict:
+    return yaml.safe_load(
+        (Path(__file__).parents[1] / ".github/workflows" / name).read_text()
+    )
+
+
+def test_build_corpus_llm_cleanup_is_opt_in() -> None:
+    workflow = load_workflow("build-corpus.yml")
+    dispatch = workflow[True]["workflow_dispatch"]
+    assert dispatch["inputs"]["llm_cleanup"] == {
+        "description": dispatch["inputs"]["llm_cleanup"]["description"],
+        "type": "boolean",
+        "default": False,
+    }
+    (step,) = [
+        s
+        for s in workflow["jobs"]["build"]["steps"]
+        if "hoa_qa.ingest build" in s.get("run", "")
+    ]
+    # The key reaches the step only on a manual run that asked for cleanup.
+    key = step["env"]["ANTHROPIC_API_KEY"]
+    assert "workflow_dispatch" in key and "inputs.llm_cleanup" in key
+    assert "workflow_dispatch" in step["env"]["LLM_CLEANUP"]
+    # Every other path builds with --no-llm.
+    assert step["run"].count("build --out build/ --no-llm") == 1
+    assert '[ "$LLM_CLEANUP" = true ] && [ -n "$ANTHROPIC_API_KEY" ]' in step["run"]
