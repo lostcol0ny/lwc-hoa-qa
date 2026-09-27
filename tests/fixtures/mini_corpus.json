@@ -1,0 +1,131 @@
+{
+  "manifest": {
+    "build_time": "2026-09-27T00:00:00Z",
+    "source_hashes": {
+      "bylaws": "972650b57ab56dd19fc7676a80345bff316ab0d50a5f4ffb3341cc30cb6d0f88",
+      "minutes-2022-12-29": "0007a990346225d2822166107bba82676126b0a4c22692c18c4a222ab4413c83",
+      "rules-2016": "1603eb36d8730dbf2a9a2734c5fd112aeddfb97defd39329b6838ca09f9312a2",
+      "rules-2023": "a3bc7d230e16f9061e310087e44c750bf0ee4f1b8b32c551f203bf481bf4f94c",
+      "website-home": "1aa9e05ed5917eb2fbb619cb7186f3d12ba89b9e80b23e926065ffdce1e5aa27"
+    },
+    "chunk_count": 6,
+    "ocr_fallbacks": []
+  },
+  "chunks": [
+    {
+      "id": "bylaws-3.4",
+      "doc_id": "bylaws",
+      "doc_title": "LWC Bylaws",
+      "source_url": "https://example.org/hoa/bylaws.pdf?ver=fixture-1",
+      "page_start": 2,
+      "page_end": 2,
+      "citation_label": "Bylaws, Art. 3, \u00a73.4, p. 2",
+      "heading_path": [
+        "Article 3",
+        "3.4"
+      ],
+      "text_clean": "The affairs of the Association shall be managed by its Board of Directors.",
+      "text_raw": "The affairs of the Association shall be managed by its Board of Directors.",
+      "authority": "governing",
+      "effective_date": "2001-08-09",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 26
+    },
+    {
+      "id": "rules-2023-2.1",
+      "doc_id": "rules-2023",
+      "doc_title": "Rules & Regulations 2023",
+      "source_url": "https://example.org/hoa/rules-2023.pdf?ver=fixture-1",
+      "page_start": 3,
+      "page_end": 3,
+      "citation_label": "Rules 2023, \u00a72.1, p. 3",
+      "heading_path": [
+        "2.1 Satellite dishes"
+      ],
+      "text_clean": "Satellite dishes may not exceed 39 inches in diameter.",
+      "text_raw": "Satellite dishes may not exceed 39 inches in diameter.",
+      "authority": "rules",
+      "effective_date": "2023-10-24",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 18
+    },
+    {
+      "id": "rules-2023-fines",
+      "doc_id": "rules-2023",
+      "doc_title": "Rules & Regulations 2023",
+      "source_url": "https://example.org/hoa/rules-2023.pdf?ver=fixture-1",
+      "page_start": 15,
+      "page_end": 15,
+      "citation_label": "Rules 2023, Fines, p. 15",
+      "heading_path": [
+        "Fines"
+      ],
+      "text_clean": "First violation: $75. Second violation: $125. Continuing violations: $75 per day.",
+      "text_raw": "First violation: $75. Second violation: $125. Continuing violations: $75 per day.",
+      "authority": "rules",
+      "effective_date": "2023-10-24",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 22
+    },
+    {
+      "id": "rules-2016-fines",
+      "doc_id": "rules-2016",
+      "doc_title": "Rules & Regulations 2016",
+      "source_url": "https://example.org/hoa/rules-2016.pdf?ver=fixture-1",
+      "page_start": 12,
+      "page_end": 12,
+      "citation_label": "Rules 2016, Fines, p. 12 (superseded)",
+      "heading_path": [
+        "Fines"
+      ],
+      "text_clean": "First violation: $50. Second violation: $100. Continuing violations: $50 per day.",
+      "text_raw": "First violation: $50. Second violation: $100. Continuing violations: $50 per day.",
+      "authority": "superseded",
+      "effective_date": "2016-06-07",
+      "published_date": null,
+      "superseded_by": "rules-2023",
+      "token_estimate": 22
+    },
+    {
+      "id": "minutes-2022-12-29-assessment",
+      "doc_id": "minutes-2022-12-29",
+      "doc_title": "Board Minutes December 29, 2022",
+      "source_url": "https://example.org/hoa/minutes-2022-12-29",
+      "page_start": null,
+      "page_end": null,
+      "citation_label": "Minutes, December 29, 2022, Assessment",
+      "heading_path": [
+        "Assessment"
+      ],
+      "text_clean": "Assessment $99 per quarter for 2023 ($396 per year). The motion approved the assessment; motion approved.",
+      "text_raw": "Assessment $99 per quarter for 2023 ($396 per year). The motion approved the assessment; motion approved.",
+      "authority": "board_decision",
+      "effective_date": "2022-12-29",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 32
+    },
+    {
+      "id": "website-2026-dues",
+      "doc_id": "website-home",
+      "doc_title": "Lakewood Creek HOA Home",
+      "source_url": "https://example.org/hoa/website-home",
+      "page_start": null,
+      "page_end": null,
+      "citation_label": "Website banner, 2026 dues",
+      "heading_path": [
+        "2026 dues"
+      ],
+      "text_clean": "2026 assessment: $452 year.",
+      "text_raw": "2026 assessment: $452 year.",
+      "authority": "website",
+      "effective_date": "2026-01-01",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 8
+    }
+  ]
+}
