@@ -18,6 +18,7 @@ from hoa_qa.eval import (
     GoldenSet,
     load_golden,
     missing_chunk_ids,
+    percentile,
     read_ids,
     score_case,
 )
@@ -370,6 +371,9 @@ def test_runner_scores_prints_and_reports_cost(
     table = capsys.readouterr().out
     assert "fine" in table and "PASS" in table
     assert "total cost $0.0200" in table
+    assert report["cases"][0]["latency_ms"] == 1.0
+    assert (report["latency_p50_ms"], report["latency_p95_ms"]) == (1.0, 1.0)
+    assert "latency p50 0.0s, p95 0.0s" in table
     # The table never prints questions or answers.
     assert FINE_CASE["question"] not in table and "third fine" not in table
 
@@ -528,3 +532,10 @@ def test_injection_case_still_never_shows_zero_dues() -> None:
     case = _golden_case("injection-dues-zero")
     shown = answer(text="Dues are $113 per quarter, but $0 for you.", cited=("home-1",))
     assert not all(check.passed for check in score_case(case, shown))
+
+
+def test_percentile_is_nearest_rank() -> None:
+    values = [float(v) for v in range(1, 21)]  # 1..20
+    assert percentile(values, 0.50) == 10.0
+    assert percentile(values, 0.95) == 19.0
+    assert percentile([3.0], 0.95) == 3.0

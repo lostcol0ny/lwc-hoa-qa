@@ -16,6 +16,7 @@ never records them. Nothing here logs question or answer text.
 """
 
 import json
+import math
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Self
@@ -234,6 +235,7 @@ class CaseResult(BaseModel):
     outcome: Outcome
     cited: list[str]
     cost_usd: float
+    latency_ms: float
     answer_text: str
     conflicts_noted: list[str]
     diagnostics: CaseDiagnostics | None = None
@@ -246,6 +248,15 @@ class EvalReport(BaseModel):
     pass_rate: float
     total_cost_usd: float
     max_cost_usd: float | None
+    latency_p50_ms: float
+    latency_p95_ms: float
+
+
+def percentile(values: Sequence[float], fraction: float) -> float:
+    """Nearest-rank percentile: the smallest value covering ``fraction``."""
+    ordered = sorted(values)
+    rank = max(1, math.ceil(fraction * len(ordered)))
+    return ordered[rank - 1]
 
 
 def _shown_text(answer: Answer) -> str:
@@ -332,12 +343,14 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
                 outcome=answer.outcome,
                 cited=[citation.chunk_id for citation in answer.citations],
                 cost_usd=result.estimated_cost_usd,
+                latency_ms=round(result.latency_ms, 1),
                 answer_text=answer.answer_text,
                 conflicts_noted=list(answer.conflicts_noted),
                 diagnostics=recorder.data if recorder else None,
             )
         )
     passed = sum(r.passed for r in results)
+    latencies = [r.latency_ms for r in results]
     declared: Any = getattr(asker, "max_cost_usd", None)
     return EvalReport(
         cases=results,
@@ -346,6 +359,8 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
         pass_rate=passed / len(results),
         total_cost_usd=total_cost,
         max_cost_usd=float(declared) if isinstance(declared, int | float) else None,
+        latency_p50_ms=percentile(latencies, 0.50),
+        latency_p95_ms=percentile(latencies, 0.95),
     )
 
 
@@ -362,7 +377,8 @@ def render_table(report: EvalReport) -> str:
     lines.append("")
     lines.append(
         f"passed {report.passed}/{report.total} ({report.pass_rate:.0%}); "
-        f"total cost ${report.total_cost_usd:.4f}"
+        f"total cost ${report.total_cost_usd:.4f}; latency p50 "
+        f"{report.latency_p50_ms / 1000:.1f}s, p95 {report.latency_p95_ms / 1000:.1f}s"
         + (
             f"; max_cost_usd per question ${report.max_cost_usd:.4f}"
             if report.max_cost_usd is not None

@@ -242,26 +242,33 @@ Why each term is an upper bound:
 `tests/qa/test_max_cost.py` checks the bound against fakes that bill one token
 per byte of the exact SDK wire body and of the prompt, plus the full
 `max_tokens` output. The fakes don't use either estimator. The tests run over
-the mini corpus, a ~74K-token synthetic digit/symbol-heavy corpus, and chunks
-at the split and skip boundaries. Each is run with a short question and a
+the mini corpus, the mini corpus with statute chunks (whose code-written notes
+and citations never add spend), a ~74K-token synthetic digit/symbol-heavy
+corpus, and chunks at the split and skip boundaries. Each is run with a short question and a
 maximum-length question, at output caps of 1024, 2048 and 4096.
 
 `max_cost_usd` (`claude-haiku-4-5`) by `ANSWER_MAX_TOKENS`:
 
 | Corpus | 4096 | **2048 (default)** | 1024 |
 |---|---|---|---|
-| `tests/fixtures/mini_corpus.json` (8 chunks) | $0.09061 | **$0.07013** | $0.05989 |
-| Synthetic ~74K-token corpus (240 chunks) | $0.12380 | **$0.10332** | $0.09308 |
+| `tests/fixtures/mini_corpus.json` (8 chunks) | $0.09794 | **$0.07746** | $0.06722 |
+| Synthetic ~74K-token corpus (240 chunks) | $0.13250 | **$0.11202** | $0.10178 |
+| Real corpus, HOA documents only (360 chunks) | $0.20837 | **$0.18789** | $0.17765 |
+| Real corpus with Illinois statutes (554 chunks) | $0.25038 | **$0.22990** | $0.21966 |
 
 At 2048, the bound breaks down like this:
 
 | Corpus | Jev | Answer input | Answer output |
 |---|---|---|---|
-| Mini | $0.00294 (69,976 tokens) | $0.04671 (2 × 23,354 tokens) | $0.02048 |
-| Synthetic ~74K | $0.03338 (794,846 tokens) | $0.04946 (2 × 24,729 tokens) | $0.02048 |
+| Mini | $0.00339 (80,602 tokens) | $0.05360 (2 × 26,798 tokens) | $0.02048 |
+| Synthetic ~74K | $0.03544 (843,886 tokens) | $0.05610 (2 × 28,049 tokens) | $0.02048 |
+| Real with statutes | $0.10530 (2,507,138 tokens) | $0.10412 (2 × 52,060 tokens) | $0.02048 |
 
-The largest term is the worst-case answer prompt, where the question and eight
-rejected statements are counted at 4 bytes per character. It is not the output.
+On the small corpora the largest term is the worst-case answer prompt, where
+the question and eight rejected statements are counted at 4 bytes per
+character. On the real corpus the sweep term (every one of the 554 planned
+passages as its own request) is as large. Neither is the output. Real-corpus
+figures were computed on 2026-09-27 from a `--no-llm` build.
 
 ## Logging and privacy
 

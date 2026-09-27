@@ -150,13 +150,16 @@ month's budget, then reconciles to the actual cost afterwards. `max_cost_usd` is
 a provable worst case: it charges every Jev request as if the question were 500
 four-byte characters and every token a single byte, and both answer attempts at
 their largest prompt and the full `ANSWER_MAX_TOKENS` output. For the real
-corpus (360 chunks) at the default settings it is **≈ $0.178**, so R ≈ $0.178.
+corpus (554 chunks, 360 HOA and 194 Illinois statute) at the default settings
+it is **≈ $0.230**, so R ≈ $0.230. Adding the statutes raised it from ≈ $0.188:
+the sweep bound charges every planned passage, and the largest statute
+sections enlarge the worst-case answer prompt.
 
 **How `MONTHLY_BUDGET_USD` and `ANSWER_MAX_TOKENS` interact.**
 
 - `ANSWER_MAX_TOKENS` raises R: each extra 1,024 tokens adds ≈ $0.010 with
-  Haiku (2 attempts × 1,024 × $5/MTok). R ≈ $0.167 at 1,024, $0.178 at 2,048,
-  $0.198 at 4,096.
+  Haiku (2 attempts × 1,024 × $5/MTok). R ≈ $0.220 at 1,024, $0.230 at 2,048,
+  $0.250 at 4,096.
 - The budget must be at least R, or **nothing** is admitted:
   `/api/health` then reports `"budget_config": "budget_below_reservation"` and
   a WARNING is logged.
