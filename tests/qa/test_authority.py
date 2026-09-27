@@ -115,7 +115,7 @@ def test_mixed_citations_are_judged_on_the_official_source_only(
     answer = ask(make_asker(corpus, settings, jev, provider)).answer
     assert judged and all(ids == ["rules-2023-fines"] for ids in judged)
     state, _ = next(c for c in jev.calls if "c0" in c[1])
-    assert state["claims"][0]["passages"] == [rules_text]
+    assert [p["text"] for p in state["claims"][0]["passages"]] == [rules_text]
     assert answer.outcome is Outcome.not_found
 
 

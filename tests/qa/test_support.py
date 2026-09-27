@@ -117,5 +117,21 @@ def test_request_shape(corpus: Corpus) -> None:
     state, questions = support_request(
         [ClaimEvidence("S", (CheckedCitation(chunk, "q"),))]
     )
-    assert state == {"claims": [{"statement": "S", "passages": [chunk.text_clean]}]}
+    assert state == {
+        "claims": [
+            {
+                "statement": "S",
+                "passages": [
+                    {
+                        "source": chunk.citation_label,
+                        "authority": chunk.authority.value,
+                        "effective_date": chunk.effective_date.isoformat()
+                        if chunk.effective_date
+                        else "unknown",
+                        "text": chunk.text_clean,
+                    }
+                ],
+            }
+        ]
+    }
     assert "support this specific claim" in questions["c0"].instructions

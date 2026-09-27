@@ -66,7 +66,12 @@ from hoa_qa.retrieval.sweep import (
 )
 from hoa_qa.trace import NO_TRACE, AskTrace, CitationTrace, ClaimTrace
 from hoa_qa.verify.quotes import CheckedCitation, check_quotes, normalize
-from hoa_qa.verify.support import ClaimEvidence, check_support, support_request
+from hoa_qa.verify.support import (
+    ClaimEvidence,
+    check_support,
+    support_passage,
+    support_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -409,6 +414,9 @@ class QAAsker:
         trace.passages(passages)
         failed: list[str] | None = None
         authority_failed = False
+        # A first attempt that could stand with its failed claims dropped; a
+        # retry that turns out worse falls back to it.
+        fallback: tuple[AnswerDraft, list[_Verified]] | None = None
         for attempt in range(2):
             generated = await self._provider.generate(
                 build_prompt(
@@ -431,21 +439,22 @@ class QAAsker:
                 # The model found nothing to say; regenerating would not help.
                 usage.notes.append("no_claims")
                 trace.attempt(attempt + 1, [], generated.note)
-                return self._not_found()
+                break
             verified = await self._verify(draft, passages, limit, usage)
             trace.attempt(attempt + 1, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
             if not failures and _has_answer(verified):
                 return self._answered(draft, verified, dropped=False)
             usage.notes.append(f"claims_failed={len(failures)}")
-            if attempt == 1:
-                # Drop rule: never show an unverified claim; if an essential
-                # claim failed, or no answer claim survives, it's not_found.
-                if any(v.essential for v in failures) or not _has_answer(verified):
-                    return self._not_found()
-                return self._answered(draft, verified, dropped=True)
+            if _can_drop(verified):
+                if attempt == 1:
+                    return self._answered(draft, verified, dropped=True)
+                fallback = (draft, verified)
             failed = [v.statement for v in failures]
             authority_failed = any(v.reason in _AUTHORITY_REASONS for v in failures)
+        if fallback is not None:
+            usage.notes.append("used_first_attempt")
+            return self._answered(*fallback, dropped=True)
         return self._not_found()
 
     async def _verify(
@@ -558,6 +567,18 @@ def _has_answer(verified: Sequence[_Verified]) -> bool:
     return any(v.ok and v.kind == "answer" for v in verified)
 
 
+def _can_drop(verified: Sequence[_Verified]) -> bool:
+    """Drop rule: the answer may stand without its failed claims.
+
+    Never show an unverified claim. If an essential answer claim failed, or
+    no answer claim survives, the answer can't stand. A failed conflict claim
+    never blocks it: the verified answer is correct without the note, and
+    conflict notes are exactly where hedged cross-source statements land.
+    """
+    blocking = any(not v.ok and v.essential and v.kind == "answer" for v in verified)
+    return _has_answer(verified) and not blocking
+
+
 def _citation(checked: CheckedCitation) -> Citation:
     return Citation(
         chunk_id=checked.chunk.id,
@@ -594,7 +615,8 @@ def max_cost_usd(
 
     # Largest chunks by their serialized size inside a support request.
     def support_bytes(chunk: Chunk) -> int:
-        return len(json.dumps(chunk.text_clean, ensure_ascii=False).encode("utf-8"))
+        serialized = json.dumps(support_passage(chunk), ensure_ascii=False)
+        return len(serialized.encode("utf-8"))
 
     widest = sorted(chunks, key=support_bytes, reverse=True)
     worst_claim = ClaimEvidence(

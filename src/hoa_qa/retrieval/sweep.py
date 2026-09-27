@@ -96,7 +96,11 @@ def batch_request(
                 "in `question`? Judge only `passages.p"
                 f"{i}`, not the other passages."
             ),
-            yes="The passage contains information needed to answer the question.",
+            yes=(
+                "The passage contains information that is part of the answer, "
+                "even if it answers only part of the question (for example, "
+                "one figure in a series or one step of a process)."
+            ),
             no="The passage is unrelated or does not help answer the question.",
         )
         for i, p in enumerate(passages)

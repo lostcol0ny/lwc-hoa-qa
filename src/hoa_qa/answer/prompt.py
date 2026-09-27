@@ -74,10 +74,12 @@ ONE short, self-contained factual statement (at most {MAX_STATEMENT_CHARS} \
 characters) that its cited passages state directly. Add nothing the passages \
 do not say: no exceptions, exemptions, advice, or guesses of your own.
 - kind: "answer" for statements that answer the question; "conflict" for a \
-disagreement between sources, naming the informal or superseded source as \
-such.
+disagreement between sources. A conflict claim states only what the other \
+source says, naming it as informal or superseded (for example: "An informal \
+2022 blog post lists a $100 fine for a 3rd offense."); the app shows it as a \
+noted conflict, so do not add your own conclusion about it.
 - essential: true if the answer would be wrong or misleading without this \
-claim; false for helpful context.
+answer claim; false for helpful context and for conflict claims.
 - Claims state what the passages say. Do not add commentary about the \
 passages themselves (what kind of document they are, what they do not \
 mention, or how they relate to the question) as a claim: leave out anything \

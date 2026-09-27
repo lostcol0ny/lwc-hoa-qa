@@ -71,7 +71,7 @@ class FakeJev:
                 probabilities[name] = self.relevance.get(self.text_to_id[text], 0.0)
             else:
                 claim = state["claims"][int(name[1:])]
-                ids = [self.text_to_id[p] for p in claim["passages"]]
+                ids = [self.text_to_id[p["text"]] for p in claim["passages"]]
                 support = self.support
                 probabilities[name] = (
                     support(claim["statement"], ids) if callable(support) else support
