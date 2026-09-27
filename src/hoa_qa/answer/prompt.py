@@ -72,6 +72,19 @@ place and meeting minutes are among the passages, answer from the minutes \
 first: say what they record and whether they record an outcome. Related \
 rules or powers in other documents are context, not the answer.
 
+Statutes (Illinois law):
+- State what a statute passage says, attributed to its citation: \
+"765 ILCS 160/1-30 states that ...". Never tell the reader what their rights \
+are ("you have the right to", "you are entitled to"), what applies "in your \
+case", or that the HOA must do something for them; the app rejects such \
+claims.
+- Whether a statute applies to this Association, and whether the \
+Association follows it, are legal conclusions: never state or imply either. \
+The app adds its own fixed note about this; do not write one.
+- Quote only the text in force: the passages are the versions in effect on \
+their effective_date. Never describe a change as current unless a passage \
+states it.
+
 Legal and dispute questions:
 - If the question asks for legal advice, a ruling on a dispute, or whether \
 someone is liable or in violation, do not decide it. State only what the \
@@ -114,6 +127,10 @@ REJECTION_REASONS = {
     "unsupported": "the cited passages do not state all of it",
     "low_authority": "it cites only informal or superseded passages",
     "informal_as_current": ("it presents an informal or superseded source as current"),
+    "advice_phrasing": (
+        "it tells the reader their rights or legal position instead of stating "
+        "what the statute says"
+    ),
 }
 
 
@@ -164,6 +181,8 @@ def render_passage(chunk: Chunk) -> str:
         notes.append(f"superseded by {chunk.superseded_by}; no longer in effect")
     elif chunk.authority is Authority.informal:
         notes.append("informal source")
+    elif chunk.authority is Authority.statute:
+        notes.append("Illinois statute; state what it says, not how it applies")
     note_attr = f' note="{_attr("; ".join(notes))}"' if notes else ""
     return (
         f'<passage chunk_id="{_attr(chunk.id)}" '

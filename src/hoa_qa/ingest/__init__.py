@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from hoa_qa.answer.statute_notes import applicability_note, cites_cicaa
 from hoa_qa.ingest.cleanup import OCRCleanup, clean
 from hoa_qa.ingest.extract import extract
 from hoa_qa.ingest.fetch import Fetcher
@@ -122,6 +123,9 @@ def build(
                 )
     if errors:
         raise ValueError("\n".join(dict.fromkeys(errors)))
+    if cites_cicaa(chunks):
+        # The CICAA note's figures must still be in the corpus (addendum §6).
+        applicability_note(chunks)
     corpus = Corpus(
         manifest=CorpusManifest(
             build_time=build_time,

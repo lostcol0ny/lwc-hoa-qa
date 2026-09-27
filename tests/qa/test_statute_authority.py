@@ -8,67 +8,24 @@ is a conflict note; code never picks a winner.
 import asyncio
 
 import pytest
-from qa_fakes import FakeJev, FakeProvider, claim, draft, make_asker
+from qa_fakes import (
+    STATUTE_MEETINGS,
+    FakeJev,
+    FakeProvider,
+    claim,
+    draft,
+    make_asker,
+    with_statutes,
+)
 
 from hoa_qa.answer.prompt import AUTHORITY_FEEDBACK, SYSTEM_PROMPT
 from hoa_qa.ask import AUTHORITATIVE, QASettings
-from hoa_qa.models import Authority, Chunk, Corpus, Outcome
-
-MEETINGS = "(a) The board shall meet at least 4 times annually."
-BYLAWS_MEETINGS = (
-    "Regular meetings of the Board of Directors shall be held at least twice each year."
-)
-
-
-def statute_chunk(chunk_id: str, label: str, text: str) -> Chunk:
-    return Chunk(
-        id=chunk_id,
-        doc_id="cicaa",
-        doc_title="Common Interest Community Association Act",
-        source_url=(
-            "https://ftp.ilga.gov/ILCS/Ch%200765/Act%200160/076501600K1-30.html"
-        ),
-        page_start=None,
-        page_end=None,
-        citation_label=label,
-        heading_path=("Common Interest Community Association Act (765 ILCS 160)",),
-        text_clean=text,
-        text_raw=text,
-        authority=Authority.statute,
-        effective_date="2024-01-01",  # pyright: ignore[reportArgumentType]
-        published_date=None,
-        superseded_by=None,
-        token_estimate=len(text) // 4,
-    )
+from hoa_qa.models import Authority, Corpus, Outcome
 
 
 @pytest.fixture
 def statute_corpus(corpus: Corpus) -> Corpus:
-    """The mini corpus plus a CICAA section and a differing Bylaws clause."""
-    bylaws = next(c for c in corpus.chunks if c.doc_id == "bylaws")
-    extra = (
-        statute_chunk(
-            "cicaa-1-30",
-            "765 ILCS 160/1-30 (Board duties and obligations; records)",
-            f"(765 ILCS 160/1-30)\nSec. 1-30. Board duties and obligations; "
-            f"records.\n{MEETINGS}",
-        ),
-        bylaws.model_copy(
-            update={
-                "id": "bylaws-5.1",
-                "citation_label": "Bylaws, Art. 5, §5.1, p. 4",
-                "text_clean": BYLAWS_MEETINGS,
-                "text_raw": BYLAWS_MEETINGS,
-            }
-        ),
-    )
-    hashes = {**corpus.manifest.source_hashes, "cicaa": "0" * 64}
-    manifest = corpus.manifest.model_copy(
-        update={"chunk_count": len(corpus.chunks) + len(extra), "source_hashes": hashes}
-    )
-    return Corpus.model_validate(
-        {"manifest": manifest, "chunks": (*corpus.chunks, *extra)}
-    )
+    return with_statutes(corpus)
 
 
 @pytest.fixture
@@ -114,7 +71,7 @@ def test_statute_and_bylaws_difference_keeps_both_and_notes_the_conflict(
     jev.relevance = {"cicaa-1-30": 0.95, "bylaws-5.1": 0.9}
     statute = claim(
         "765 ILCS 160/1-30 states that the board shall meet at least 4 times annually.",
-        ("cicaa-1-30", MEETINGS),
+        ("cicaa-1-30", STATUTE_MEETINGS),
     )
     bylaws = claim(
         "The Bylaws say regular Board meetings are held at least twice each year.",
@@ -136,4 +93,5 @@ def test_statute_and_bylaws_difference_keeps_both_and_notes_the_conflict(
     assert statute.statement in answer.answer_text
     assert bylaws.statement in answer.answer_text
     assert answer.conflicts_noted == (conflict.statement,)
-    assert {c.chunk_id for c in answer.citations} == {"cicaa-1-30", "bylaws-5.1"}
+    ids = [c.chunk_id for c in answer.citations]
+    assert ids[:2] == ["cicaa-1-30", "bylaws-5.1"]

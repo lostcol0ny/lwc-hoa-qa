@@ -366,12 +366,28 @@ def test_build_reads_the_snapshot_and_fetches_only_the_listing(
         calls.append(url)
         return page
 
+    # CICAA without the applicability note's evidence chunks fails the build.
+    with pytest.raises(ValueError, match="amendments-committee-intro is missing"):
+        build(tmp_path / "out", registry, fetcher=fetch, crawl_date=BUILD_DATE)
+    assert not (tmp_path / "out/corpus.json").exists()
+
+    # Another Act has no note, so the same snapshot builds.
+    other = tmp_path / "statutes/other-act"
+    (tmp_path / "statutes/cicaa").rename(other)
+    manifest = json.loads((other / "manifest.json").read_text())
+    (other / "manifest.json").write_text(
+        json.dumps({**manifest, "doc_id": "other-act"})
+    )
+    registry.write_text(
+        yaml.safe_dump([statute_source(doc_id="other-act").model_dump(mode="json")])
+    )
+    calls.clear()
     corpus = build(tmp_path / "out", registry, fetcher=fetch, crawl_date=BUILD_DATE)
     assert calls == [LISTING_URL]
-    assert [c.id for c in corpus.chunks] == ["cicaa-1-30"]
-    manifest = (tmp_path / "statutes/cicaa/manifest.json").read_bytes()
+    assert [c.id for c in corpus.chunks] == ["other-act-1-30"]
+    manifest_bytes = (other / "manifest.json").read_bytes()
     assert corpus.manifest.source_hashes == {
-        "cicaa": hashlib.sha256(manifest).hexdigest()
+        "other-act": hashlib.sha256(manifest_bytes).hexdigest()
     }
 
 
