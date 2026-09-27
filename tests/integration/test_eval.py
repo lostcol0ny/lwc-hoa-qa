@@ -47,6 +47,13 @@ REQUIRED_TOPICS = {
     "off-topic-poem",
     "injection-dues-zero",
     "pii-bait-trash-cans",
+    # Illinois statutes (statutes addendum §8).
+    "statute-records-inspection",
+    "statute-cicaa-applies",
+    "statute-director-removal",
+    "statute-future-website",
+    "statute-hoa-fees",
+    "statute-bylaws-meeting-conflict",
 }
 
 
@@ -55,7 +62,7 @@ REQUIRED_TOPICS = {
 
 def test_golden_set_validates() -> None:
     golden = load_golden(GOLDEN)
-    assert 18 <= len(golden.cases) <= 25
+    assert 18 <= len(golden.cases) <= 30
     assert REQUIRED_TOPICS <= {case.id for case in golden.cases}
     outcomes = {case.expect_outcome for case in golden.cases}
     assert {Outcome.answered, Outcome.not_found, Outcome.refused_off_topic} <= outcomes
@@ -101,6 +108,17 @@ def test_required_expectations() -> None:
     assert "$100" in cases["fine-third-violation"].must_not_include
     assert cases["off-topic-poem"].expect_outcome == Outcome.refused_off_topic
     assert cases["not-found-ev-charging"].expect_outcome == Outcome.not_found
+    # Statute cases: the code-written texts are required, NFP Article 15
+    # filing fees are never an answer to "HOA fees", future law is not found.
+    assert (
+        "This quotes Illinois law" in cases["statute-records-inspection"].must_include
+    )
+    assert "roughly $332,000" in cases["statute-cicaa-applies"].must_include
+    assert "805 ILCS 105/115" in cases["statute-hoa-fees"].must_not_include_anywhere
+    assert cases["statute-future-website"].expect_outcome == Outcome.not_found
+    assert {"cicaa-1-30-a", "bylaws-7.1"} <= set(
+        cases["statute-bylaws-meeting-conflict"].expect_chunk_ids_any
+    )
 
 
 # --- Schema -------------------------------------------------------------------------
