@@ -1,7 +1,10 @@
 """Jev support check: does each claim's cited evidence support THAT claim?
 
 One Noul per claim, over the claim's statement and the distinct passages its
-quote-checked citations point to. Claims are batched under the Jev limits and
+quote-checked citations point to. Each passage carries its source label,
+authority, and effective date next to its text, so a claim that attributes a
+fact ("under the 2023 Rules") can be judged; that metadata comes from the
+corpus, never from the model. Claims are batched under the Jev limits and
 the shared concurrency bound. A claim with no quote-checked citation, or too
 large to judge in any single request, fails closed without a call.
 """
@@ -12,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from hoa_qa.models import Chunk
 from hoa_qa.retrieval.jev import (
     DEFAULT_LIMITS,
     JevClient,
@@ -40,12 +44,26 @@ class SupportResult:
     supported: tuple[bool, ...]  # one per claim, in input order
     input_tokens: int
     requests: int
+    # The judged probability per claim; None where no request was made.
+    probabilities: tuple[float | None, ...] = ()
 
 
-def _passages(evidence: ClaimEvidence) -> list[str]:
-    seen: dict[str, str] = {}
+def support_passage(chunk: Chunk) -> dict[str, str]:
+    """How one cited passage appears in a support request."""
+    effective = chunk.effective_date.isoformat() if chunk.effective_date else "unknown"
+    return {
+        "source": chunk.citation_label,
+        "authority": chunk.authority.value,
+        "effective_date": effective,
+        "text": chunk.text_clean,
+    }
+
+
+def _passages(evidence: ClaimEvidence) -> list[dict[str, str]]:
+    seen: dict[str, dict[str, str]] = {}
     for citation in evidence.citations:
-        seen.setdefault(citation.chunk.id, citation.chunk.text_clean)
+        if citation.chunk.id not in seen:
+            seen[citation.chunk.id] = support_passage(citation.chunk)
     return list(seen.values())
 
 
@@ -62,7 +80,8 @@ def support_request(
                 f"claim, `claims[{i}].statement`?"
             ),
             yes=(
-                "Everything the statement asserts is stated in the passages, "
+                "Everything the statement asserts is stated in the passages "
+                "(their text, or their source, authority, and effective date), "
                 "including every amount, date, condition, and exception."
             ),
             no=(
@@ -102,11 +121,15 @@ async def check_support(
         jev, [support_request([c for _, c in group]) for group in groups], limit
     )
     supported = [False] * len(claims)
+    probabilities: list[float | None] = [None] * len(claims)
     for group, result in zip(groups, results, strict=True):
         for position, (index, _) in enumerate(group):
-            supported[index] = result.probabilities[f"c{position}"] >= threshold
+            p = result.probabilities[f"c{position}"]
+            probabilities[index] = p
+            supported[index] = p >= threshold
     return SupportResult(
         supported=tuple(supported),
         input_tokens=sum(r.input_tokens for r in results),
         requests=len(groups),
+        probabilities=tuple(probabilities),
     )

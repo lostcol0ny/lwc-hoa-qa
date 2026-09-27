@@ -19,6 +19,7 @@ from hoa_qa.retrieval.jev import (
     request_tokens,
 )
 from hoa_qa.retrieval.sweep import (
+    MAX_PASSAGES_PER_REQUEST,
     SweepPassage,
     SweepPlan,
     batch_request,
@@ -118,7 +119,7 @@ def test_one_request_per_document(corpus: Corpus, jev: FakeJev) -> None:
     for state, questions in sweep_calls:
         docs = {
             next(c.doc_id for c in corpus.chunks if c.text_clean == p["text"])
-            for p in state["passages"]
+            for p in state["passages"].values()
         }
         assert len(docs) == 1
         assert len(questions) == len(state["passages"])
@@ -133,9 +134,27 @@ def test_question_wording_references_each_passage() -> None:
         SweepPassage(make_chunk(i, "d", f"text {i}"), f"text {i}") for i in range(3)
     ]
     state, questions = batch_request(Q, passages)
-    assert [p["text"] for p in state["passages"]] == ["text 0", "text 1", "text 2"]
-    assert "`passages[2]`" in questions["p2"].instructions
+    # Keyed, not positional: each question names its own passage's key and
+    # repeats its heading, so the judge never counts into a list.
+    assert {k: p["text"] for k, p in state["passages"].items()} == {
+        "p0": "text 0",
+        "p1": "text 1",
+        "p2": "text 2",
+    }
+    assert set(questions) == set(state["passages"])
+    assert "`passages.p2`" in questions["p2"].instructions
+    assert repr(state["passages"]["p2"]["heading"]) in questions["p2"].instructions
     assert "help answer the question" in questions["p2"].instructions
+
+
+def test_requests_hold_a_bounded_number_of_passages() -> None:
+    chunks = [words(i, "d", 1) for i in range(MAX_PASSAGES_PER_REQUEST * 2 + 1)]
+    plan = make_plan(chunks)
+    assert [len(b) for b in plan.batches] == [
+        MAX_PASSAGES_PER_REQUEST,
+        MAX_PASSAGES_PER_REQUEST,
+        1,
+    ]
 
 
 # --- the two Jev limits, independently ---------------------------------------
@@ -222,11 +241,7 @@ def test_oversized_real_chunk_is_split_and_scored_by_best_part(
         jev.calls.append((dict(state), dict(questions)))
         assert fits(state, questions)
         probs = {
-            n: (
-                0.9
-                if "sentence 11999 " in state["passages"][int(n[1:])]["text"]
-                else 0.1
-            )
+            n: (0.9 if "sentence 11999 " in state["passages"][n]["text"] else 0.1)
             for n in questions
         }
         from hoa_qa.retrieval.jev import NoulBatchResult

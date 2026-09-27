@@ -67,11 +67,11 @@ class FakeJev:
             if name == "on_topic":
                 probabilities[name] = self.gate
             elif name.startswith("p"):
-                text = state["passages"][int(name[1:])]["text"]
+                text = state["passages"][name]["text"]
                 probabilities[name] = self.relevance.get(self.text_to_id[text], 0.0)
             else:
                 claim = state["claims"][int(name[1:])]
-                ids = [self.text_to_id[p] for p in claim["passages"]]
+                ids = [self.text_to_id[p["text"]] for p in claim["passages"]]
                 support = self.support
                 probabilities[name] = (
                     support(claim["statement"], ids) if callable(support) else support
@@ -104,6 +104,8 @@ class FakeProvider:
     prompts: list[AnswerPrompt] = field(default_factory=list)
     input_tokens: list[int] = field(default_factory=list)
     output_tokens: list[int] = field(default_factory=list)
+    # Per call: whether salvage dropped claims (ProviderResult.claims_trimmed).
+    trimmed: list[bool] = field(default_factory=list)
 
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
         self.prompts.append(prompt)
@@ -111,7 +113,11 @@ class FakeProvider:
         tokens_in, tokens_out = self.bill(prompt, draft)
         self.input_tokens.append(tokens_in)
         self.output_tokens.append(tokens_out)
-        return ProviderResult(draft, self.model, tokens_in, tokens_out)
+        call = len(self.prompts) - 1
+        trimmed = self.trimmed[call] if call < len(self.trimmed) else False
+        return ProviderResult(
+            draft, self.model, tokens_in, tokens_out, claims_trimmed=trimmed
+        )
 
     def bill(self, prompt: AnswerPrompt, draft: AnswerDraft | None) -> tuple[int, int]:
         return (

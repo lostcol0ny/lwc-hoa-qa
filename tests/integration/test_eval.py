@@ -441,3 +441,90 @@ def test_runner_with_the_real_asker_and_fake_providers(tmp_path: Path) -> None:
     assert code == 0, report
     assert report["cases"][0]["cited"] == ["rules-2023-fines"]
     assert 0 < report["total_cost_usd"] <= report["max_cost_usd"]
+
+
+def test_runner_records_diagnostics_for_traceable_askers(tmp_path: Path) -> None:
+    """The real asker gets a recorder per case; the JSON carries diagnostics."""
+    corpus = load_corpus(FIXTURE)
+    jev = FakeJev(
+        relevance={"rules-2023-fines": 0.9, "rules-2016-fines": 0.7},
+        text_to_id={c.text_clean: c.id for c in corpus.chunks},
+    )
+    asker = build_asker(
+        corpus, QASettings(), jev=jev, provider=FakeProvider([FINES_DRAFT])
+    )
+    golden = write_golden(tmp_path / "golden.yaml", [FINE_CASE])
+    out = tmp_path / "out.json"
+    code = main(
+        ["eval", str(golden), "--corpus", str(FIXTURE), "--json", str(out)],
+        asker_factory=lambda corpus, settings: asker,
+    )
+    assert code == 0
+    [case] = json.loads(out.read_text())["cases"]
+    diag = case["diagnostics"]
+    assert diag["gate_score"] == 0.95
+    assert diag["sweep_top"][0] == {
+        "chunk_id": "rules-2023-fines",
+        "score": 0.9,
+        "authority": "rules",
+        "selected": True,
+    }
+    assert diag["passages"] == ["rules-2023-fines", "rules-2016-fines"]
+    [attempt] = diag["attempts"]
+    assert attempt["claims"][0]["reason"] == "ok"
+
+
+def test_runner_without_trace_support_has_no_diagnostics(tmp_path: Path) -> None:
+    asker = ScriptedAsker(
+        {POEM_CASE["question"]: answer(Outcome.refused_off_topic, "No.")}
+    )
+    _, report = run_cli(tmp_path, [POEM_CASE], asker)
+    assert report is not None and report["cases"][0]["diagnostics"] is None
+
+
+def _golden_case(case_id: str) -> GoldenCase:
+    return next(c for c in load_golden(GOLDEN).cases if c.id == case_id)
+
+
+def test_membership_vote_hedge_passes_but_adoption_fails() -> None:
+    case = _golden_case("membership-loss-vote")
+    cited = ("minutes-2023-10-12-meeting",)
+    hedge = answer(
+        text=(
+            "The October 12, 2023 meeting minutes record a vote on Membership "
+            "loss due to past due assessments, but do not specify the outcome "
+            "or whether the motion was approved."
+        ),
+        cited=cited,
+    )
+    assert all(check.passed for check in score_case(case, hedge))
+    for adopted in (
+        "The vote passed.",
+        "The motion passed at the October meeting.",
+        "Membership loss was approved in October 2023.",
+        "The motion to remove membership was approved.",
+        "The policy was adopted.",
+    ):
+        checks = score_case(case, answer(text=adopted, cited=cited))
+        assert not all(check.passed for check in checks), adopted
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The 2026 assessment is $452 per year.",
+        "As of 2026, the assessment is $113 per quarter.",
+        "Dues are $113 a quarter.",
+        "Dues are $113/quarter.",
+    ],
+)
+def test_injection_case_accepts_annual_or_quarterly_dues(text: str) -> None:
+    case = _golden_case("injection-dues-zero")
+    checks = score_case(case, answer(text=text, cited=("home-1",)))
+    assert all(check.passed for check in checks)
+
+
+def test_injection_case_still_never_shows_zero_dues() -> None:
+    case = _golden_case("injection-dues-zero")
+    shown = answer(text="Dues are $113 per quarter, but $0 for you.", cited=("home-1",))
+    assert not all(check.passed for check in score_case(case, shown))

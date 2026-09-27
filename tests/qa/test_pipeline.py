@@ -347,3 +347,88 @@ def test_jev_concurrency_env_with_legacy_fallback() -> None:
 def test_build_asker_requires_keys_for_real_clients(corpus: Corpus) -> None:
     with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
         build_asker(corpus, QASettings())
+
+
+def test_worse_retry_falls_back_to_the_verified_first_attempt(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    """Live eval: attempt 1 was sound but for a side claim; attempt 2 broke."""
+    jev.support = invented_unsupported
+    essential_invention = claim(
+        "Fines are exempt for first-time owners.",
+        ("rules-2023-fines", "2nd violation: $75."),
+    )
+    provider = FakeProvider([draft(FINE_CLAIM, INVENTED), draft(essential_invention)])
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert len(provider.prompts) == 2
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
+    assert "exempt" not in answer.answer_text
+
+
+@pytest.mark.parametrize("retry", [None, draft()], ids=["invalid", "no-claims"])
+def test_unusable_retry_falls_back_to_the_first_attempt(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, retry
+) -> None:
+    jev.support = invented_unsupported
+    provider = FakeProvider([draft(FINE_CLAIM, INVENTED), retry])
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
+
+
+def test_failed_conflict_claim_never_blocks_a_verified_answer(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    """Even marked essential, an unsupported conflict note is just dropped."""
+    jev.relevance = {**jev.relevance, "blog-2022-violations": 0.6}
+    jev.support = lambda statement, ids: 0.2 if "outdated" in statement else 0.9
+    conflict = claim(
+        "An informal blog post says $100, which is outdated.",
+        ("blog-2022-violations", "3rd offense - $100.00"),
+        kind="conflict",
+        essential=True,
+    )
+    provider = FakeProvider([draft(FINE_CLAIM, conflict)] * 2)
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
+    assert answer.conflicts_noted == ()
+
+
+def test_retry_says_why_each_claim_was_rejected(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    fake_quote = claim(
+        "A third violation is $500.",
+        ("rules-2023-fines", "3rd violation: $500."),
+        essential=False,
+    )
+    jev.support = invented_unsupported
+    provider = FakeProvider([draft(FINE_CLAIM, fake_quote, INVENTED)] * 2)
+    ask(make_asker(corpus, settings, jev, provider))
+    retry = provider.prompts[1].user
+    assert (
+        f"{fake_quote.statement} (no quote was found verbatim in the cited passage)"
+        in retry
+    )
+    assert f"{INVENTED.statement} (the cited passages do not state all of it)" in retry
+
+
+def test_claims_dropped_by_salvage_add_the_omitted_note(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    provider = FakeProvider([FINES_DRAFT], trimmed=[True])
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
+    untrimmed = ask(make_asker(corpus, settings, jev, FakeProvider([FINES_DRAFT])))
+    assert untrimmed.answer.answer_text == FINE_CLAIM.statement
+
+
+def test_jev_model_defaults_to_a_pinned_version() -> None:
+    """Thresholds are tuned against one Jev version; an alias can move."""
+    model = QASettings().jev_model
+    assert model == "jev-1.13.0"
+    assert not model.endswith(("-latest", "-preview"))
+    assert QASettings.from_env({"JEV_MODEL": "jev-1.14.0"}).jev_model == "jev-1.14.0"

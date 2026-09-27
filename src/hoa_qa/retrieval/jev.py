@@ -177,11 +177,13 @@ def pack[T](
     ],
     count_tokens: TokenCounter = conservative_tokens,
     limits: JevLimits = DEFAULT_LIMITS,
+    max_items: int | None = None,
 ) -> tuple[list[list[T]], list[T]]:
     """Greedily split ``items`` into consecutive groups whose request fits.
 
-    Returns ``(groups, oversized)``. Every group is within both limits; items
-    that do not fit even alone are returned in ``oversized`` and never sent.
+    Returns ``(groups, oversized)``. Every group is within both limits (and
+    holds at most ``max_items`` items, if given); items that do not fit even
+    alone are returned in ``oversized`` and never sent.
     """
     groups: list[list[T]] = []
     oversized: list[T] = []
@@ -191,7 +193,9 @@ def pack[T](
             oversized.append(item)
             continue
         candidate = [*current, item]
-        if fits(*build(candidate), count_tokens, limits):
+        if (max_items is None or len(candidate) <= max_items) and fits(
+            *build(candidate), count_tokens, limits
+        ):
             current = candidate
         else:
             groups.append(current)

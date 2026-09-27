@@ -1,11 +1,18 @@
 """Relevance sweep: one Jev Noul per chunk, batched per document.
 
 Each request carries one document's passages in its state and asks one
-question per passage. ``plan_passages`` decides once per corpus, sized for the
-longest possible question, how each chunk is sent: whole, split into
-sub-passages (relevance is the best part), or skipped. ``plan_batches`` then
-packs those passages per document for the actual question; a document too
-large for one request is split across several.
+question per passage. Passages are keyed by their question's name
+(``passages.p3``) and each question repeats the passage heading: the first
+live eval showed the judge mis-indexing positional references
+(``passages[30]``) in long lists, scoring a neighbor instead of the Rules'
+fining schedule. For the same reason a request holds at most
+``MAX_PASSAGES_PER_REQUEST`` passages.
+
+``plan_passages`` decides once per corpus, sized for the longest possible
+question, how each chunk is sent: whole, split into sub-passages (relevance is
+the best part), or skipped. ``plan_batches`` then packs those passages per
+document for the actual question; a document too large for one request, or
+with more than MAX_PASSAGES_PER_REQUEST passages, is split across several.
 """
 
 import asyncio
@@ -32,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 # Below this many characters a passage is not split further.
 MIN_SPLIT_CHARS = 64
+# Passages judged in one request; smaller batches keep references reliable.
+MAX_PASSAGES_PER_REQUEST = 8
+# Headings repeated in a question are cut to this many characters.
+MAX_HEADING_CHARS = 120
 
 
 @dataclass(frozen=True)
@@ -55,6 +66,8 @@ class SweepResult:
     selected: tuple[ScoredChunk, ...]
     input_tokens: int
     requests: int
+    # Every judged chunk, best first (for eval diagnostics).
+    scores: tuple[ScoredChunk, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,18 +83,27 @@ def batch_request(
     state = {
         "question": question,
         "document": passages[0].chunk.doc_title if passages else "",
-        "passages": [{"heading": _heading(p), "text": p.text} for p in passages],
+        "passages": {
+            f"p{i}": {"heading": _heading(p), "text": p.text}
+            for i, p in enumerate(passages)
+        },
     }
     questions = {
         f"p{i}": NoulQuestion(
             instructions=(
-                f"Does this passage, `passages[{i}]`, help answer the question "
-                "in `question`?"
+                f"Does the passage `passages.p{i}` (heading: "
+                f"{_heading(p)[:MAX_HEADING_CHARS]!r}) help answer the question "
+                "in `question`? Judge only `passages.p"
+                f"{i}`, not the other passages."
             ),
-            yes="The passage contains information needed to answer the question.",
+            yes=(
+                "The passage contains information that is part of the answer, "
+                "even if it answers only part of the question (for example, "
+                "one figure in a series or one step of a process)."
+            ),
             no="The passage is unrelated or does not help answer the question.",
         )
-        for i in range(len(passages))
+        for i, p in enumerate(passages)
     }
     return state, questions
 
@@ -184,6 +206,7 @@ def plan_batches(
             lambda group: batch_request(question, group),
             count_tokens,
             limits,
+            max_items=MAX_PASSAGES_PER_REQUEST,
         )
         # Planned passages fit alone with the longest question, so oversized
         # is empty; if the invariant ever broke, fail closed rather than send.
@@ -225,15 +248,13 @@ async def sweep(
     for passage in passages:
         order.setdefault(passage.chunk.id, len(order))
         by_id[passage.chunk.id] = passage.chunk
-    passing = [
-        ScoredChunk(by_id[chunk_id], p)
-        for chunk_id, p in best.items()
-        if p >= threshold
-    ]
+    scores = [ScoredChunk(by_id[chunk_id], p) for chunk_id, p in best.items()]
     # Highest probability first; corpus order breaks ties deterministically.
-    passing.sort(key=lambda s: (-s.probability, order[s.chunk.id]))
+    scores.sort(key=lambda s: (-s.probability, order[s.chunk.id]))
+    passing = [s for s in scores if s.probability >= threshold]
     return SweepResult(
         selected=tuple(passing[: max(0, top_k)]),
         input_tokens=sum(r.input_tokens for r in results),
         requests=len(plan.batches),
+        scores=tuple(scores),
     )

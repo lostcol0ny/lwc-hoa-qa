@@ -42,19 +42,29 @@ Articles of Incorporation > Bylaws.
 effective_date wins.
 - When passages disagree, give the answer from the highest-authority, newest \
 source, and REPORT the disagreement as a claim of kind "conflict" (for \
-example: an older blog post quotes different fine amounts). Never silently \
-pick one.
+example: an old newsletter gives different allowed mailbox styles than the \
+current rules). Never silently pick one.
 - Label informal sources (newsletters, blog posts) as informal, and \
 superseded sources as superseded/no longer in effect, whenever you mention \
-them.
-- A series of changes over time (for example dues rising year to year) is \
-history, not a conflict: give the current figure and, if useful, the history.
+them. Never describe what an informal or superseded source says as the \
+current rule.
+- When a governing, rules, or board_decision passage covers the question, \
+"answer" claims must cite it: an answer claim that cites only informal or \
+superseded passages is rejected by the app. Mention the informal or \
+superseded version, if at all, only in a "conflict" claim.
+- A series of changes over time (for example a lawn-watering schedule the \
+Board revised several times) is history, not a conflict: give the current figure \
+and, if useful, the history.
 
 Proposals vs. decisions:
 - Distinguish proposals, bids, hypothetical scenarios, and unresolved votes \
 from adopted decisions. Only a motion recorded as approved/adopted, or a \
 governing document or rule, is policy. Say plainly when something was only \
 proposed or discussed.
+- When the question asks whether a vote, meeting action, or decision took \
+place and meeting minutes are among the passages, answer from the minutes \
+first: say what they record and whether they record an outcome. Related \
+rules or powers in other documents are context, not the answer.
 
 Legal and dispute questions:
 - If the question asks for legal advice, a ruling on a dispute, or whether \
@@ -69,10 +79,17 @@ ONE short, self-contained factual statement (at most {MAX_STATEMENT_CHARS} \
 characters) that its cited passages state directly. Add nothing the passages \
 do not say: no exceptions, exemptions, advice, or guesses of your own.
 - kind: "answer" for statements that answer the question; "conflict" for a \
-disagreement between sources, naming the informal or superseded source as \
-such.
+disagreement between sources. A conflict claim states only what the other \
+source says, naming it as informal or superseded (for example: "An \
+informal newsletter lists different allowed mailbox styles."), never as \
+current; the app shows it as a noted conflict, so do not add your own \
+conclusion about it.
 - essential: true if the answer would be wrong or misleading without this \
-claim; false for helpful context.
+answer claim; false for helpful context and for conflict claims.
+- Claims state what the passages say. Do not add commentary about the \
+passages themselves (what kind of document they are, what they do not \
+mention, or how they relate to the question) as a claim: leave out anything \
+the passages do not state.
 - citations: 1 to {MAX_CITATIONS_PER_CLAIM} per claim. chunk_id must be the \
 chunk_id of a provided passage. quote must be copied EXACTLY, character for \
 character, from that passage's text: a short contiguous span, not a \
@@ -83,6 +100,28 @@ questions; do not write the referral yourself.
 - If the passages do not answer the question, return no claims and set \
 confidence to 0.
 """
+
+# Why a claim was rejected, as told to the model on a retry (code-authored).
+REJECTION_REASONS = {
+    "no_valid_quote": "no quote was found verbatim in the cited passage",
+    "unsupported": "the cited passages do not state all of it",
+    "low_authority": "it cites only informal or superseded passages",
+    "informal_as_current": ("it presents an informal or superseded source as current"),
+}
+
+
+def rejected(statement: str, reason: str) -> str:
+    """A rejected-claims entry: the statement and why it failed."""
+    why = REJECTION_REASONS.get(reason)
+    return f"{statement} ({why})" if why else statement
+
+
+AUTHORITY_FEEDBACK = (
+    "Some rejected claims cited only informal or superseded passages although "
+    "governing, rules, or board_decision passages were provided. Answer from "
+    "those higher-authority passages; report an informal or superseded source "
+    'only as a "conflict" claim.'
+)
 
 RETRY_FEEDBACK = (
     "Your previous answer was rejected. Each quote must be copied exactly from "
@@ -134,8 +173,13 @@ def build_prompt(
     passages: Sequence[Chunk],
     *,
     failed_claims: Sequence[str] | None = None,
+    authority_note: bool = False,
 ) -> AnswerPrompt:
-    """Build the prompt; ``failed_claims`` (possibly empty) marks a retry."""
+    """Build the prompt; ``failed_claims`` (possibly empty) marks a retry.
+
+    ``authority_note`` adds AUTHORITY_FEEDBACK to a retry whose rejected
+    claims broke the authority rule.
+    """
     body = "\n".join(render_passage(chunk) for chunk in passages)
     user = (
         "<passages>\n"
@@ -147,6 +191,8 @@ def build_prompt(
     )
     if failed_claims is not None:
         user += f"\n\n{RETRY_FEEDBACK}"
+        if authority_note:
+            user += f"\n{AUTHORITY_FEEDBACK}"
         if failed_claims:
             listed = "\n".join(f"- {defang(claim)}" for claim in failed_claims)
             user += (

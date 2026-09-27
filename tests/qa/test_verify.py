@@ -33,3 +33,9 @@ def test_rejections(corpus: Corpus) -> None:
         by_id(corpus),
     )
     assert [k.quote for k in kept] == ["2nd violation: $75."]
+
+
+def test_normalize_folds_ellipses_and_dashes() -> None:
+    assert normalize("HOA DUES… This — that – other") == normalize(
+        "HOA DUES... This - that - other"
+    )
