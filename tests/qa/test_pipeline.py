@@ -4,16 +4,42 @@ import asyncio
 import uuid
 
 import pytest
-from qa_fakes import FINES_DRAFT, FakeJev, FakeProvider, draft, make_asker
+from qa_fakes import (
+    FINE_CLAIM,
+    FINES_DRAFT,
+    FakeJev,
+    FakeProvider,
+    claim,
+    draft,
+    make_asker,
+)
 
-from hoa_qa.ask import DISCLAIMER, MAX_QUESTION_CHARS, QASettings, clean_question
+from hoa_qa.ask import (
+    BOARD_REFERRAL,
+    DISCLAIMER,
+    MAX_QUESTION_CHARS,
+    OMITTED_NOTE,
+    QASettings,
+    build_asker,
+    clean_question,
+)
 from hoa_qa.models import Corpus, Outcome, citation_url
 
 QUESTION = "How much is the fine for a second violation?"
 
+INVENTED = claim(
+    "Seniors over 65 are exempt from all fines.",
+    ("rules-2023-fines", "First violation: $75."),
+    essential=False,
+)
+
 
 def ask(asker, question: str = QUESTION):
     return asyncio.run(asker(question))
+
+
+def invented_unsupported(statement: str, ids) -> float:
+    return 0.05 if "exempt" in statement else 0.9
 
 
 @pytest.mark.parametrize(
@@ -54,8 +80,7 @@ def test_off_topic_is_refused_without_answer_model(
 def test_gate_threshold_is_configurable(corpus: Corpus, jev: FakeJev) -> None:
     jev.gate = 0.6
     strict = QASettings(gate_threshold=0.7)
-    provider = FakeProvider([FINES_DRAFT])
-    result = ask(make_asker(corpus, strict, jev, provider))
+    result = ask(make_asker(corpus, strict, jev, FakeProvider([FINES_DRAFT])))
     assert result.answer.outcome is Outcome.refused_off_topic
 
 
@@ -79,7 +104,7 @@ def test_answered_builds_public_answer(
     result = ask(make_asker(corpus, settings, jev, provider))
     answer = result.answer
     assert answer.outcome is Outcome.answered
-    assert answer.answer_text == FINES_DRAFT.answer_text
+    assert answer.answer_text == FINE_CLAIM.statement
     assert answer.disclaimer == DISCLAIMER
     assert uuid.UUID(answer.request_id).version == 4
     [citation] = answer.citations
@@ -96,6 +121,27 @@ def test_answered_builds_public_answer(
     assert 'chunk_id="bylaws-3.4"' not in user
 
 
+def test_answer_text_is_composed_from_claims_and_code_text(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    conflict = claim(
+        "An informal 2022 blog post lists $100 for a 3rd offense.",
+        ("blog-2022-violations", "3rd offense - $100.00"),
+        kind="conflict",
+        essential=False,
+    )
+    jev.relevance = {**jev.relevance, "blog-2022-violations": 0.6}
+    provider = FakeProvider([draft(FINE_CLAIM, conflict, refer_to_board=True)])
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {BOARD_REFERRAL}"
+    assert answer.conflicts_noted == (conflict.statement,)
+    assert [c.chunk_id for c in answer.citations] == [
+        "rules-2023-fines",
+        "blog-2022-violations",
+    ]
+
+
 def test_request_ids_are_unique(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
@@ -103,60 +149,131 @@ def test_request_ids_are_unique(
     assert ask(asker).answer.request_id != ask(asker).answer.request_id
 
 
-def test_fabricated_quote_is_dropped(
+def test_invented_claim_never_reaches_answer_text(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
-    provider = FakeProvider(
-        [
-            draft(
-                ("rules-2023-fines", "Second violation: $125."),
-                ("rules-2023-fines", "Second violation: $500."),
-            )
-        ]
-    )
+    """B3: a correct fine plus an invented exemption citing a real quote."""
+    jev.support = invented_unsupported
+    provider = FakeProvider([draft(FINE_CLAIM, INVENTED)])
     result = ask(make_asker(corpus, settings, jev, provider))
-    assert [c.quote for c in result.answer.citations] == ["Second violation: $125."]
+    answer = result.answer
+    assert "exempt" not in answer.answer_text
+    assert "Seniors" not in " ".join(answer.conflicts_noted)
+    # It regenerated once (naming the failed claim), then dropped it and noted so.
+    assert len(provider.prompts) == 2
+    assert INVENTED.statement in provider.prompts[1].user
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
+    assert [c.quote for c in answer.citations] == ["Second violation: $125."]
 
 
-def test_chunk_id_outside_provided_passages_is_dropped(
+def test_regenerate_fixes_failed_claim(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    jev.support = invented_unsupported
+    provider = FakeProvider([draft(FINE_CLAIM, INVENTED), FINES_DRAFT])
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.answer_text == FINE_CLAIM.statement  # no omission note
+
+
+def test_failed_essential_claim_is_not_found(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    jev.support = invented_unsupported
+    essential_invention = claim(
+        "Fines are exempt for first-time owners.",
+        ("rules-2023-fines", "First violation: $75."),
+        essential=True,
+    )
+    bad = draft(FINE_CLAIM, essential_invention)
+    provider = FakeProvider([bad, bad])
+    result = ask(make_asker(corpus, settings, jev, provider))
+    assert result.answer.outcome is Outcome.not_found
+    assert "exempt" not in result.answer.answer_text
+
+
+def test_only_conflict_claims_surviving_is_not_found(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    jev.support = lambda statement, ids: 0.9 if "blog" in statement else 0.1
+    conflict = claim(
+        "An informal blog post lists $100.",
+        ("blog-2022-violations", "3rd offense - $100.00"),
+        kind="conflict",
+        essential=False,
+    )
+    wrong = claim(
+        "A second violation costs $125 and is waived on holidays.",
+        ("rules-2023-fines", "Second violation: $125."),
+        essential=False,
+    )
+    jev.relevance = {**jev.relevance, "blog-2022-violations": 0.6}
+    bad = draft(wrong, conflict)
+    result = ask(make_asker(corpus, settings, jev, FakeProvider([bad, bad])))
+    assert result.answer.outcome is Outcome.not_found
+
+
+def test_fabricated_quote_fails_claim(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    fake_quote = claim(
+        "A second violation is $500.",
+        ("rules-2023-fines", "Second violation: $500."),
+        essential=False,
+    )
+    provider = FakeProvider([draft(FINE_CLAIM, fake_quote)] * 2)
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert "$500" not in answer.answer_text
+    assert [c.quote for c in answer.citations] == ["Second violation: $125."]
+
+
+def test_chunk_id_outside_provided_passages_fails_claim(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
     # bylaws-3.4 exists in the corpus and the quote is real, but the sweep did
     # not select it, so the model was never shown it.
-    provider = FakeProvider(
-        [
-            draft(
-                ("bylaws-3.4", "managed by its Board of Directors"),
-                ("rules-2023-fines", "First violation: $75."),
-            )
-        ]
+    outside = claim(
+        "The Board manages the Association.",
+        ("bylaws-3.4", "managed by its Board of Directors"),
+        essential=False,
     )
-    result = ask(make_asker(corpus, settings, jev, provider))
-    assert [c.chunk_id for c in result.answer.citations] == ["rules-2023-fines"]
+    provider = FakeProvider([draft(FINE_CLAIM, outside)] * 2)
+    answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert [c.chunk_id for c in answer.citations] == ["rules-2023-fines"]
+    assert "manages" not in answer.answer_text
 
 
-def test_unsupported_citation_is_dropped(
+def test_one_bad_citation_does_not_sink_a_claim(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
-    jev.support = lambda chunk_id: 0.2 if chunk_id == "rules-2016-fines" else 0.9
-    provider = FakeProvider(
-        [
-            draft(
-                ("rules-2023-fines", "Second violation: $125."),
-                ("rules-2016-fines", "Second violation: $100."),
-            )
-        ]
+    mixed = claim(
+        FINE_CLAIM.statement,
+        ("rules-2023-fines", "Second violation: $125."),
+        ("rules-2023-fines", "not in the passage"),
     )
-    result = ask(make_asker(corpus, settings, jev, provider))
-    assert [c.chunk_id for c in result.answer.citations] == ["rules-2023-fines"]
-    [support_call] = jev.calls_of("c")
-    assert len(support_call) == 2  # both survivors judged in one request
+    answer = ask(make_asker(corpus, settings, jev, FakeProvider([draft(mixed)]))).answer
+    assert answer.outcome is Outcome.answered
+    assert [c.quote for c in answer.citations] == ["Second violation: $125."]
 
 
-def test_all_citations_fail_regenerates_once_then_not_found(
+def test_support_is_judged_per_claim(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
-    bad = draft(("rules-2023-fines", "Fines are waived for everyone."))
+    jev.support = invented_unsupported
+    ask(make_asker(corpus, settings, jev, FakeProvider([draft(FINE_CLAIM, INVENTED)])))
+    state, questions = next(c for c in jev.calls if "c0" in c[1])
+    assert [c["statement"] for c in state["claims"]] == [
+        FINE_CLAIM.statement,
+        INVENTED.statement,
+    ]
+    assert "`claims[1].statement`" in questions["c1"].instructions
+
+
+def test_all_claims_fail_regenerates_once_then_not_found(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    bad = draft(claim("Fines are waived.", ("rules-2023-fines", "Fines are waived.")))
     provider = FakeProvider([bad, bad, FINES_DRAFT])
     result = ask(make_asker(corpus, settings, jev, provider))
     assert result.answer.outcome is Outcome.not_found
@@ -164,23 +281,16 @@ def test_all_citations_fail_regenerates_once_then_not_found(
     assert len(provider.prompts) == 2
     assert "rejected" not in provider.prompts[0].user
     assert "rejected" in provider.prompts[1].user
+    assert "Fines are waived." in provider.prompts[1].user
 
 
-def test_regenerate_can_recover(
+def test_no_claims_means_not_found_without_retry(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
-    provider = FakeProvider([draft(("nope", "x")), FINES_DRAFT])
-    result = ask(make_asker(corpus, settings, jev, provider))
-    assert result.answer.outcome is Outcome.answered
-    assert len(provider.prompts) == 2
-
-
-def test_zero_citation_answer_is_never_answered(
-    corpus: Corpus, settings: QASettings, jev: FakeJev
-) -> None:
-    provider = FakeProvider([draft(text="Dues are $0.")])
+    provider = FakeProvider([draft()])
     result = ask(make_asker(corpus, settings, jev, provider))
     assert result.answer.outcome is Outcome.not_found
+    assert len(provider.prompts) == 1
     assert jev.calls_of("c") == []  # nothing to support-check
 
 
@@ -191,6 +301,7 @@ def test_invalid_model_output_counts_as_failed_attempt(
     result = ask(make_asker(corpus, settings, jev, provider))
     assert result.answer.outcome is Outcome.not_found
     assert len(provider.prompts) == 2
+    assert "not valid" in provider.prompts[1].user
 
 
 def test_provider_exception_becomes_error_outcome(
@@ -226,8 +337,13 @@ def test_settings_from_env() -> None:
         QASettings.from_env({"SWEEP_THRESHOLD": "1.5"})
 
 
-def test_build_asker_requires_keys_for_real_clients(corpus: Corpus) -> None:
-    from hoa_qa.ask import build_asker
+def test_jev_concurrency_env_with_legacy_fallback() -> None:
+    assert QASettings.from_env({"JEV_CONCURRENCY": "3"}).jev_concurrency == 3
+    assert QASettings.from_env({"SWEEP_CONCURRENCY": "2"}).jev_concurrency == 2
+    both = {"JEV_CONCURRENCY": "5", "SWEEP_CONCURRENCY": "2"}
+    assert QASettings.from_env(both).jev_concurrency == 5
 
+
+def test_build_asker_requires_keys_for_real_clients(corpus: Corpus) -> None:
     with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
         build_asker(corpus, QASettings())

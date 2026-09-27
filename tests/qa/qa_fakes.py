@@ -1,38 +1,62 @@
-"""Fake Jev and answer providers for the QA tests. No network, no keys."""
+"""Fake Jev and answer providers for the QA tests. No network, no keys.
 
-from collections.abc import Callable, Mapping
+Both fakes bill realistic token counts (the same conservative bound the
+pipeline uses for sizing) so cost and ``max_cost_usd`` tests are meaningful.
+"""
+
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from hoa_qa.answer.prompt import AnswerPrompt
-from hoa_qa.answer.provider import AnswerDraft, DraftCitation, ProviderResult
+from hoa_qa.answer.provider import (
+    AnswerDraft,
+    DraftCitation,
+    DraftClaim,
+    ProviderResult,
+)
 from hoa_qa.ask import QAAsker, QASettings, build_asker
 from hoa_qa.models import Corpus
-from hoa_qa.retrieval.jev import NoulBatchResult, NoulQuestion
+from hoa_qa.retrieval.jev import (
+    NoulBatchResult,
+    NoulQuestion,
+    conservative_tokens,
+    fits,
+    request_tokens,
+)
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "mini_corpus.json"
-JEV_TOKENS_PER_CALL = 1_000
-ANSWER_INPUT_TOKENS = 2_000
-ANSWER_OUTPUT_TOKENS = 300
+
+SupportFn = Callable[[str, Sequence[str]], float]
 
 
 @dataclass
 class FakeJev:
-    """Routes by question name: ``on_topic`` (gate), ``p*`` (sweep), ``c*``."""
+    """Routes by question name: ``on_topic`` (gate), ``p*`` (sweep), ``c*``.
+
+    ``support`` is a constant or ``f(statement, cited_chunk_ids)``. ``fail``
+    decides, per request, whether to raise instead of answering.
+    """
 
     gate: float = 0.95
     relevance: Mapping[str, float] = field(default_factory=dict)
-    support: float | Callable[[str], float] = 0.9
+    support: float | SupportFn = 0.9
+    fail: Callable[[Mapping[str, Any]], bool] = lambda state: False
     calls: list[tuple[dict[str, Any], dict[str, NoulQuestion]]] = field(
         default_factory=list
     )
+    billed: list[int] = field(default_factory=list)
     text_to_id: dict[str, str] = field(default_factory=dict)
 
     async def nouls(
         self, state: Mapping[str, Any], questions: Mapping[str, NoulQuestion]
     ) -> NoulBatchResult:
+        # Every request the pipeline sends must be within Jev's limits.
+        assert fits(state, questions)
         self.calls.append((dict(state), dict(questions)))
+        if self.fail(state):
+            raise RuntimeError("jev unavailable")
         probabilities: dict[str, float] = {}
         for name in questions:
             if name == "on_topic":
@@ -41,12 +65,15 @@ class FakeJev:
                 text = state["passages"][int(name[1:])]["text"]
                 probabilities[name] = self.relevance.get(self.text_to_id[text], 0.0)
             else:
-                passage = state["citations"][int(name[1:])]["passage"]
+                claim = state["claims"][int(name[1:])]
+                ids = [self.text_to_id[p] for p in claim["passages"]]
                 support = self.support
                 probabilities[name] = (
-                    support(self.text_to_id[passage]) if callable(support) else support
+                    support(claim["statement"], ids) if callable(support) else support
                 )
-        return NoulBatchResult(probabilities, JEV_TOKENS_PER_CALL)
+        tokens = request_tokens(state, questions)[0]
+        self.billed.append(tokens)
+        return NoulBatchResult(probabilities, tokens)
 
     def calls_of(self, kind: str) -> list[dict[str, NoulQuestion]]:
         return [
@@ -62,28 +89,48 @@ class FakeProvider:
     drafts: list[AnswerDraft | None]
     model: str = "claude-haiku-4-5"
     prompts: list[AnswerPrompt] = field(default_factory=list)
+    input_tokens: list[int] = field(default_factory=list)
+    output_tokens: list[int] = field(default_factory=list)
 
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
         self.prompts.append(prompt)
         draft = self.drafts[min(len(self.prompts), len(self.drafts)) - 1]
-        return ProviderResult(
-            draft, self.model, ANSWER_INPUT_TOKENS, ANSWER_OUTPUT_TOKENS
-        )
+        tokens_in = conservative_tokens(prompt.system + prompt.user)
+        tokens_out = conservative_tokens(draft.model_dump_json() if draft else "{")
+        self.input_tokens.append(tokens_in)
+        self.output_tokens.append(tokens_out)
+        return ProviderResult(draft, self.model, tokens_in, tokens_out)
 
 
-def draft(*citations: tuple[str, str], text: str = "Answer.") -> AnswerDraft:
-    return AnswerDraft(
-        answer_text=text,
-        citations=[DraftCitation(chunk_id=c, quote=q) for c, q in citations],
-        confidence=0.8,
-        conflicts_noted=[],
+def claim(
+    statement: str,
+    *citations: tuple[str, str],
+    kind: str = "answer",
+    essential: bool = True,
+) -> DraftClaim:
+    return DraftClaim.model_validate(
+        {
+            "statement": statement,
+            "kind": kind,
+            "essential": essential,
+            "citations": [
+                DraftCitation(chunk_id=c, quote=q).model_dump() for c, q in citations
+            ],
+        }
     )
 
 
-FINES_DRAFT = draft(
+def draft(*claims: DraftClaim, refer_to_board: bool = False) -> AnswerDraft:
+    return AnswerDraft(
+        claims=list(claims), confidence=0.8, refer_to_board=refer_to_board
+    )
+
+
+FINE_CLAIM = claim(
+    "A second violation is a $125 fine under the 2023 Rules.",
     ("rules-2023-fines", "Second violation: $125."),
-    text="A second violation is a $125 fine under the 2023 Rules.",
 )
+FINES_DRAFT = draft(FINE_CLAIM)
 
 
 def make_asker(

@@ -61,10 +61,16 @@ def test_typesafe_adapter_batches_nouls_in_one_request() -> None:
 def test_anthropic_adapter_uses_json_schema_output() -> None:
     seen: list[dict] = []
     output = {
-        "answer_text": "A second violation is $125.",
-        "citations": [{"chunk_id": "rules-2023-fines", "quote": "$125"}],
+        "claims": [
+            {
+                "statement": "A second violation is $125.",
+                "kind": "answer",
+                "essential": True,
+                "citations": [{"chunk_id": "rules-2023-fines", "quote": "$125"}],
+            }
+        ],
         "confidence": 0.9,
-        "conflicts_noted": [],
+        "refer_to_board": False,
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -91,7 +97,7 @@ def test_anthropic_adapter_uses_json_schema_output() -> None:
     )
     result = asyncio.run(provider.generate(AnswerPrompt(system="S", user="U")))
     assert result.draft is not None
-    assert result.draft.citations[0].quote == "$125"
+    assert result.draft.claims[0].citations[0].quote == "$125"
     assert (result.model, result.input_tokens, result.output_tokens) == (
         "claude-haiku-4-5",
         1500,
@@ -102,6 +108,8 @@ def test_anthropic_adapter_uses_json_schema_output() -> None:
     assert body["system"] == "S"
     assert body["messages"] == [{"role": "user", "content": "U"}]
     assert body["output_config"]["format"]["type"] == "json_schema"
+    schema = body["output_config"]["format"]["schema"]
+    assert schema["required"] == ["claims", "confidence", "refer_to_board"]
 
 
 def test_anthropic_adapter_rejects_truncated_output() -> None:
@@ -113,7 +121,7 @@ def test_anthropic_adapter_rejects_truncated_output() -> None:
                 "type": "message",
                 "role": "assistant",
                 "model": "claude-haiku-4-5",
-                "content": [{"type": "text", "text": '{"answer_text": "A'}],
+                "content": [{"type": "text", "text": '{"claims": [{"statement": "A'}],
                 "stop_reason": "max_tokens",
                 "stop_sequence": None,
                 "usage": {"input_tokens": 10, "output_tokens": 4096},

@@ -3,8 +3,17 @@
 Callers describe yes/no judgments as ``NoulQuestion`` values and get back plain
 probabilities plus the billed input tokens, so everything above this module can
 be tested with a fake ``JevClient``.
+
+Request sizing. The SDK exposes no tokenizer or token-counting endpoint (only
+``/v1/systemone`` and ``/v1/models``), so sizes use a deliberately conservative
+bound: one token per ``ASCII_BYTES_PER_TOKEN`` ASCII bytes (about 1.6-1.8x the
+~4-4.5 characters/token typical of English) plus one token per non-ASCII
+UTF-8 byte (the byte-fallback worst case), plus fixed per-request and
+per-question overheads for the JSON envelope, question names, and criteria
+keys. ``pack`` never emits a group over either Jev limit.
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -19,12 +28,27 @@ logger = logging.getLogger(__name__)
 MAX_REQUEST_TOKENS = 64_000
 MAX_STATE_TOKENS = 32_000
 
+ASCII_BYTES_PER_TOKEN = 2.5
+REQUEST_OVERHEAD_TOKENS = 256
+QUESTION_OVERHEAD_TOKENS = 32
+
 TokenCounter = Callable[[str], int]
 
 
-def estimate_tokens(text: str) -> int:
-    """Conservative token estimate (~4 characters per token, rounded up)."""
-    return math.ceil(len(text) / 4)
+def conservative_tokens(text: str) -> int:
+    """Conservative token count: ASCII bytes / 2.5 + one per non-ASCII byte."""
+    ascii_bytes = sum(1 for ch in text if ord(ch) < 128)
+    other_bytes = len(text.encode("utf-8")) - ascii_bytes
+    return math.ceil(ascii_bytes / ASCII_BYTES_PER_TOKEN) + other_bytes
+
+
+@dataclass(frozen=True)
+class JevLimits:
+    max_request_tokens: int = MAX_REQUEST_TOKENS
+    max_state_tokens: int = MAX_STATE_TOKENS
+
+
+DEFAULT_LIMITS = JevLimits()
 
 
 @dataclass(frozen=True)
@@ -52,6 +76,18 @@ class JevClient(Protocol):
         ...
 
 
+class PartialCostError(Exception):
+    """Some Jev requests failed; carries the tokens the successful ones billed."""
+
+    def __init__(self, jev_input_tokens: int, errors: Sequence[BaseException]):
+        super().__init__(
+            f"{len(errors)} Jev request(s) failed: "
+            + ", ".join(type(e).__name__ for e in errors)
+        )
+        self.jev_input_tokens = jev_input_tokens
+        self.errors = tuple(errors)
+
+
 def state_json(state: Mapping[str, Any]) -> str:
     return json.dumps(state, ensure_ascii=False, sort_keys=True)
 
@@ -59,27 +95,32 @@ def state_json(state: Mapping[str, Any]) -> str:
 def request_tokens(
     state: Mapping[str, Any],
     questions: Mapping[str, NoulQuestion],
-    count_tokens: TokenCounter = estimate_tokens,
+    count_tokens: TokenCounter = conservative_tokens,
 ) -> tuple[int, int]:
-    """Return (state + all questions, state + longest question) token estimates."""
+    """Return (whole request, state + longest question) token bounds."""
     state_tokens = count_tokens(state_json(state))
     sizes = [
-        count_tokens(q.instructions + (q.yes or "") + (q.no or ""))
-        for q in questions.values()
+        QUESTION_OVERHEAD_TOKENS
+        + count_tokens(name + q.instructions + (q.yes or "") + (q.no or ""))
+        for name, q in questions.items()
     ]
-    return state_tokens + sum(sizes), state_tokens + max(sizes, default=0)
+    return (
+        REQUEST_OVERHEAD_TOKENS + state_tokens + sum(sizes),
+        REQUEST_OVERHEAD_TOKENS + state_tokens + max(sizes, default=0),
+    )
 
 
 def fits(
     state: Mapping[str, Any],
     questions: Mapping[str, NoulQuestion],
-    count_tokens: TokenCounter = estimate_tokens,
-    *,
-    max_request_tokens: int = MAX_REQUEST_TOKENS,
-    max_state_tokens: int = MAX_STATE_TOKENS,
+    count_tokens: TokenCounter = conservative_tokens,
+    limits: JevLimits = DEFAULT_LIMITS,
 ) -> bool:
     total, state_plus_longest = request_tokens(state, questions, count_tokens)
-    return total <= max_request_tokens and state_plus_longest <= max_state_tokens
+    return (
+        total <= limits.max_request_tokens
+        and state_plus_longest <= limits.max_state_tokens
+    )
 
 
 def pack[T](
@@ -87,42 +128,61 @@ def pack[T](
     build: Callable[
         [Sequence[T]], tuple[Mapping[str, Any], Mapping[str, NoulQuestion]]
     ],
-    count_tokens: TokenCounter = estimate_tokens,
-    *,
-    max_request_tokens: int = MAX_REQUEST_TOKENS,
-    max_state_tokens: int = MAX_STATE_TOKENS,
-) -> list[list[T]]:
+    count_tokens: TokenCounter = conservative_tokens,
+    limits: JevLimits = DEFAULT_LIMITS,
+) -> tuple[list[list[T]], list[T]]:
     """Greedily split ``items`` into consecutive groups whose request fits.
 
-    ``build`` turns a group into the (state, questions) it would send. An item
-    that does not fit even on its own still gets a group of one, so nothing is
-    silently dropped; the API rejects it and the caller sees the error.
+    Returns ``(groups, oversized)``. Every group is within both limits; items
+    that do not fit even alone are returned in ``oversized`` and never sent.
     """
     groups: list[list[T]] = []
+    oversized: list[T] = []
     current: list[T] = []
     for item in items:
-        candidate = [*current, item]
-        if fits(
-            *build(candidate),
-            count_tokens,
-            max_request_tokens=max_request_tokens,
-            max_state_tokens=max_state_tokens,
-        ):
-            current = candidate
+        if not fits(*build([item]), count_tokens, limits):
+            oversized.append(item)
             continue
-        if current:
+        candidate = [*current, item]
+        if fits(*build(candidate), count_tokens, limits):
+            current = candidate
+        else:
             groups.append(current)
-        current = [item]
-        if not fits(
-            *build(current),
-            count_tokens,
-            max_request_tokens=max_request_tokens,
-            max_state_tokens=max_state_tokens,
-        ):
-            logger.warning("jev item exceeds the per-request token limit on its own")
+            current = [item]
     if current:
         groups.append(current)
-    return groups
+    return groups, oversized
+
+
+async def run_nouls(
+    jev: JevClient,
+    requests: Sequence[tuple[Mapping[str, Any], Mapping[str, NoulQuestion]]],
+    limit: asyncio.Semaphore,
+) -> list[NoulBatchResult]:
+    """Run every request to completion under ``limit``.
+
+    If any fail, the rest still finish, and ``PartialCostError`` reports the
+    tokens the successful ones billed so the caller can still count them.
+    """
+
+    async def one(
+        request: tuple[Mapping[str, Any], Mapping[str, NoulQuestion]],
+    ) -> NoulBatchResult:
+        async with limit:
+            return await jev.nouls(*request)
+
+    outcomes = await asyncio.gather(*(one(r) for r in requests), return_exceptions=True)
+    for outcome in outcomes:
+        # Cancellation and interpreter exits are not request failures.
+        if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+            raise outcome
+    results = [o for o in outcomes if isinstance(o, NoulBatchResult)]
+    errors = [o for o in outcomes if isinstance(o, Exception)]
+    if errors:
+        raise PartialCostError(
+            sum(r.input_tokens for r in results), errors
+        ) from errors[0]
+    return results
 
 
 class TypeSafeJevClient:
@@ -151,7 +211,7 @@ class TypeSafeJevClient:
             raise RuntimeError(f"Jev response is missing {len(missing)} answers")
         input_tokens = response.usage.input_tokens
         if input_tokens is None:
-            # Usage is optional in the API contract; fall back to our estimate so
+            # Usage is optional in the API contract; fall back to our bound so
             # the spend counter never under-reports to zero.
             input_tokens = request_tokens(state, questions)[0]
         return NoulBatchResult(

@@ -12,6 +12,11 @@ from dataclasses import dataclass
 
 from hoa_qa.models import Authority, Chunk
 
+# Hard caps on the model's output shape (validated in answer.provider).
+MAX_CLAIMS = 8
+MAX_CITATIONS_PER_CLAIM = 3
+MAX_STATEMENT_CHARS = 400
+
 AUTHORITY_ORDER = (
     "governing > rules > board_decision > website > form = informal > superseded"
 )
@@ -33,8 +38,9 @@ Articles of Incorporation > Bylaws.
 - Within the same authority level, the passage with the newer \
 effective_date wins.
 - When passages disagree, give the answer from the highest-authority, newest \
-source, and REPORT the disagreement in conflicts_noted (for example: an older \
-blog post quotes different fine amounts). Never silently pick one.
+source, and REPORT the disagreement as a claim of kind "conflict" (for \
+example: an older blog post quotes different fine amounts). Never silently \
+pick one.
 - Label informal sources (newsletters, blog posts) as informal, and \
 superseded sources as superseded/no longer in effect, whenever you mention \
 them.
@@ -49,28 +55,37 @@ proposed or discussed.
 
 Legal and dispute questions:
 - If the question asks for legal advice, a ruling on a dispute, or whether \
-someone is liable or in violation, do not decide it. Point to the relevant \
-passages if any, and refer the person to the Board of Directors or the \
-management company.
+someone is liable or in violation, do not decide it. State only what the \
+relevant passages say, and set refer_to_board to true: the app then refers \
+the person to the Board of Directors or the management company.
 
-Output rules:
-- answer_text: a short, plain-language answer (a few sentences).
-- citations: every factual statement must be backed by at least one \
-citation. chunk_id must be the chunk_id of a provided passage. quote must be \
-copied EXACTLY, character for character, from that passage's text: a short \
-contiguous span, not a paraphrase and not stitched from separate parts.
+Output rules (every claim is checked separately against the passages it \
+cites, and any claim they do not fully support is removed):
+- claims: split the answer into at most {MAX_CLAIMS} claims. Each claim is \
+ONE short, self-contained factual statement (at most {MAX_STATEMENT_CHARS} \
+characters) that its cited passages state directly. Add nothing the passages \
+do not say: no exceptions, exemptions, advice, or guesses of your own.
+- kind: "answer" for statements that answer the question; "conflict" for a \
+disagreement between sources, naming the informal or superseded source as \
+such.
+- essential: true if the answer would be wrong or misleading without this \
+claim; false for helpful context.
+- citations: 1 to {MAX_CITATIONS_PER_CLAIM} per claim. chunk_id must be the \
+chunk_id of a provided passage. quote must be copied EXACTLY, character for \
+character, from that passage's text: a short contiguous span, not a \
+paraphrase and not stitched from separate parts.
 - confidence: 0 to 1, how well the passages answer the question.
-- conflicts_noted: one short sentence per conflict you reported; empty if \
-none.
-- If the passages do not answer the question, say so in answer_text, cite \
-nothing, and set confidence to 0.
+- refer_to_board: true for legal, liability, violation, or dispute \
+questions; do not write the referral yourself.
+- If the passages do not answer the question, return no claims and set \
+confidence to 0.
 """
 
 RETRY_FEEDBACK = (
-    "Your previous answer was rejected: none of its citations could be "
-    "verified. Each quote must be copied exactly from the text of the passage "
-    "whose chunk_id you give, and the passage must support the answer. Try "
-    "again using only the passages above."
+    "Your previous answer was rejected. Each quote must be copied exactly from "
+    "the text of the passage whose chunk_id you give, and the cited passages "
+    "must fully support the claim's statement. Try again using only the "
+    "passages above."
 )
 
 _TAG = re.compile(r"<(/?)\s*(question|passages|passage)\b", re.IGNORECASE)
@@ -110,8 +125,12 @@ def render_passage(chunk: Chunk) -> str:
 
 
 def build_prompt(
-    question: str, passages: Sequence[Chunk], *, retry: bool = False
+    question: str,
+    passages: Sequence[Chunk],
+    *,
+    failed_claims: Sequence[str] | None = None,
 ) -> AnswerPrompt:
+    """Build the prompt; ``failed_claims`` (possibly empty) marks a retry."""
     body = "\n".join(render_passage(chunk) for chunk in passages)
     user = (
         "<passages>\n"
@@ -121,6 +140,14 @@ def build_prompt(
         f"{defang(question)}\n"
         "</question>"
     )
-    if retry:
+    if failed_claims is not None:
         user += f"\n\n{RETRY_FEEDBACK}"
+        if failed_claims:
+            listed = "\n".join(f"- {defang(claim)}" for claim in failed_claims)
+            user += (
+                "\nThese claims could not be verified; drop them or fix their "
+                f"citations:\n{listed}"
+            )
+        else:
+            user += "\nThe previous output was not valid."
     return AnswerPrompt(system=SYSTEM_PROMPT, user=user)

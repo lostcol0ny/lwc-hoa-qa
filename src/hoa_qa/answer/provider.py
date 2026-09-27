@@ -2,11 +2,16 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from hoa_qa.answer.prompt import AnswerPrompt
+from hoa_qa.answer.prompt import (
+    MAX_CITATIONS_PER_CLAIM,
+    MAX_CLAIMS,
+    MAX_STATEMENT_CHARS,
+    AnswerPrompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,39 +26,64 @@ class DraftCitation(BaseModel):
     quote: str
 
 
+class DraftClaim(BaseModel):
+    """One short factual statement and the passages that back it.
+
+    ``kind`` is "answer" for statements that answer the question and
+    "conflict" for disagreements between sources. ``essential`` marks a claim
+    the answer cannot stand without; it only ever makes verification stricter.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1, max_length=MAX_STATEMENT_CHARS)
+    kind: Literal["answer", "conflict"]
+    essential: bool
+    citations: list[DraftCitation] = Field(
+        min_length=1, max_length=MAX_CITATIONS_PER_CLAIM
+    )
+
+
 class AnswerDraft(BaseModel):
     """The answer model's structured output, before verification."""
 
     model_config = ConfigDict(extra="forbid")
 
-    answer_text: str
-    citations: list[DraftCitation]
+    claims: list[DraftClaim] = Field(max_length=MAX_CLAIMS)
     confidence: float = Field(ge=0, le=1)
-    conflicts_noted: list[str]
+    refer_to_board: bool
 
 
-# Structured-output JSON schema. Numeric bounds are enforced by AnswerDraft,
-# since output schemas do not accept minimum/maximum.
+_CITATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"chunk_id": {"type": "string"}, "quote": {"type": "string"}},
+    "required": ["chunk_id", "quote"],
+    "additionalProperties": False,
+}
+
+# Structured-output JSON schema. Numeric bounds and array/string length caps
+# are enforced by AnswerDraft, since output schemas do not accept them all.
 ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "answer_text": {"type": "string"},
-        "citations": {
+        "claims": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "chunk_id": {"type": "string"},
-                    "quote": {"type": "string"},
+                    "statement": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["answer", "conflict"]},
+                    "essential": {"type": "boolean"},
+                    "citations": {"type": "array", "items": _CITATION_SCHEMA},
                 },
-                "required": ["chunk_id", "quote"],
+                "required": ["statement", "kind", "essential", "citations"],
                 "additionalProperties": False,
             },
         },
         "confidence": {"type": "number"},
-        "conflicts_noted": {"type": "array", "items": {"type": "string"}},
+        "refer_to_board": {"type": "boolean"},
     },
-    "required": ["answer_text", "citations", "confidence", "conflicts_noted"],
+    "required": ["claims", "confidence", "refer_to_board"],
     "additionalProperties": False,
 }
 
