@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lakewood Creek HOA Q&amp;A</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Lakewood Creek HOA Q&amp;A</h1>
+    <p class="intro">Ask a question about the HOA's rules, dues, amenities or governance.
+      Answers come only from the HOA's published documents, with links to the source.</p>
+
+    <form id="ask-form" novalidate>
+      <label for="question">Your question</label>
+      <textarea id="question" name="question" rows="4" maxlength="500" required
+        aria-describedby="char-count disclaimer"
+        placeholder="e.g. How many guests can I bring to the pool?"></textarea>
+      <div class="form-row">
+        <span id="char-count" class="char-count" aria-live="polite">0 / 500</span>
+        <button id="ask-button" type="submit">Ask</button>
+      </div>
+      <p id="disclaimer" class="disclaimer">Unofficial tool, not legal advice; the governing
+        documents and the Board are authoritative. Don't include personal information;
+        questions are processed by third-party AI services.</p>
+    </form>
+
+    <section id="answer" class="answer" aria-live="polite" aria-busy="false"></section>
+
+    <p class="docs-link"><a id="documents-link" href="https://lakewoodcreekhoa.com/"
+      target="_blank" rel="noopener noreferrer">Browse the HOA documents</a></p>
+  </main>
+</body>
+</html>

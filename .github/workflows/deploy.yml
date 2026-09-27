@@ -1,0 +1,96 @@
+name: Deploy
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  UV_LOCKED: "1"
+  VERCEL_CLI_VERSION: "60.1.3"
+concurrency:
+  group: deploy-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # download the corpus artifact from build-corpus.yml
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TARGET: ${{ github.event_name == 'push' && 'production' || 'preview' }}
+    steps:
+      - name: Check Vercel secrets
+        id: secrets
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Deploy skipped"
+              echo "VERCEL_TOKEN, VERCEL_ORG_ID or VERCEL_PROJECT_ID is not set"
+              echo "(fork PRs never receive secrets). See docs/web-ops.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: steps.secrets.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+      - name: Download latest corpus artifact
+        if: steps.secrets.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-corpus.yml \
+            --branch main --status success --limit 1 --json databaseId \
+            --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::No successful build-corpus.yml run on main. Run the 'Build corpus' workflow first."
+            exit 1
+          fi
+          if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name corpus --dir corpus-artifact; then
+            echo "::error::Run $run_id has no 'corpus' artifact (it may have expired). Re-run 'Build corpus'."
+            exit 1
+          fi
+          for f in corpus.json corpus_manifest.json; do
+            if [ ! -f "corpus-artifact/$f" ]; then
+              echo "::error::The 'corpus' artifact from run $run_id is missing $f."
+              exit 1
+            fi
+          done
+          mv corpus-artifact/corpus.json corpus-artifact/corpus_manifest.json .
+          echo "Using corpus from build-corpus run $run_id" >> "$GITHUB_STEP_SUMMARY"
+      - uses: astral-sh/setup-uv@6b9c6063abd6010835644d4c2e1bef4cf5cd0fca # v6.0.1
+        if: steps.secrets.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+      - name: Validate corpus
+        if: steps.secrets.outputs.enabled == 'true'
+        run: uv run --no-dev python -c "from hoa_qa.models import load_corpus; load_corpus('corpus.json')"
+      - name: Install Vercel CLI
+        if: steps.secrets.outputs.enabled == 'true'
+        run: npm install --global "vercel@${VERCEL_CLI_VERSION}"
+      - name: Pull Vercel project settings
+        if: steps.secrets.outputs.enabled == 'true'
+        run: vercel pull --yes --environment="$VERCEL_TARGET" --token="$VERCEL_TOKEN"
+      - name: Build
+        if: steps.secrets.outputs.enabled == 'true'
+        run: |
+          if [ "$VERCEL_TARGET" = production ]; then
+            vercel build --prod --token="$VERCEL_TOKEN"
+          else
+            vercel build --token="$VERCEL_TOKEN"
+          fi
+      - name: Deploy
+        if: steps.secrets.outputs.enabled == 'true'
+        run: |
+          if [ "$VERCEL_TARGET" = production ]; then
+            url="$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")"
+          else
+            url="$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")"
+          fi
+          echo "### Deployed ($VERCEL_TARGET): $url" >> "$GITHUB_STEP_SUMMARY"

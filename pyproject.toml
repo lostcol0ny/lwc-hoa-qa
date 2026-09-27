@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Document-grounded Lakewood Creek HOA Q&A"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2,<3"]
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "pydantic>=2,<3",
+    "uvicorn>=0.54.0",
+]
 
 [project.scripts]
 hoa-qa = "hoa_qa.cli:main"
@@ -38,3 +43,7 @@ venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.vercel]
+# Vercel's FastAPI preset loads `app` from api/index.py (see docs/web-ops.md).
+entrypoint = "api.index:app"
