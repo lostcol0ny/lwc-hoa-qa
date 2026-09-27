@@ -57,7 +57,8 @@ if (typeof module !== "undefined" && module.exports) {
 if (typeof document !== "undefined") {
   (function () {
     const MAX_CHARS = 500;
-    const DEFAULT_DOCUMENTS_URL = "https://lakewoodcreekhoa.com/";
+    // Same-origin route that 307-redirects to the configured HOA documents.
+    const DOCUMENTS_PATH = "/documents";
     const form = document.getElementById("ask-form");
     const composer = document.getElementById("composer");
     const textarea = document.getElementById("question");
@@ -65,8 +66,6 @@ if (typeof document !== "undefined") {
     const button = document.getElementById("ask-button");
     const buttonLabel = document.getElementById("ask-button-label");
     const answerRegion = document.getElementById("answer");
-    const documentsLink = document.getElementById("documents-link");
-    let documentsUrl = DEFAULT_DOCUMENTS_URL;
     let composing = false;
 
     const OUTCOMES = {
@@ -98,12 +97,6 @@ if (typeof document !== "undefined") {
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       return link;
-    }
-
-    function setDocumentsUrl(url) {
-      if (!isHttpsUrl(url)) return;
-      documentsUrl = url;
-      documentsLink.href = url;
     }
 
     function updateCounter() {
@@ -172,10 +165,10 @@ if (typeof document !== "undefined") {
         card.append(list);
       }
 
-      if (SHOW_DOCUMENTS_LINK.has(outcome) && isHttpsUrl(documentsUrl)) {
+      if (SHOW_DOCUMENTS_LINK.has(outcome)) {
         const more = el("p", "docs-hint");
         more.append("You can also ");
-        more.append(externalLink(documentsUrl, "read the HOA documents directly"));
+        more.append(externalLink(DOCUMENTS_PATH, "read the HOA documents directly"));
         more.append(".");
         card.append(more);
       }
@@ -224,16 +217,6 @@ if (typeof document !== "undefined") {
       }
     }
 
-    async function loadDocumentsUrl() {
-      try {
-        const response = await fetch("/api/health");
-        const body = await response.json();
-        setDocumentsUrl(body.documents_url);
-      } catch (_) {
-        // Keep the default link.
-      }
-    }
-
     textarea.addEventListener("input", updateCounter);
     textarea.addEventListener("compositionstart", function () {
       composing = true;
@@ -264,8 +247,6 @@ if (typeof document !== "undefined") {
       ask(question);
     });
 
-    setDocumentsUrl(DEFAULT_DOCUMENTS_URL);
     updateCounter();
-    loadDocumentsUrl();
   })();
 }

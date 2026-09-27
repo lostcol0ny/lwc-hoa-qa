@@ -392,8 +392,6 @@ h3 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform
   text-align: center;
 }
 
-.site-footer a:not([href]) { display: none; }
-
 /* Small screens: composer runs the full content width. */
 
 @media (max-width: 480px) {

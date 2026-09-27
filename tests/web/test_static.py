@@ -57,6 +57,8 @@ def test_page_accessibility_and_disclaimer() -> None:
     beams = re.findall(r'<span class="beam[^"]*"[^>]*>', html)
     assert beams and all('aria-hidden="true"' in beam for beam in beams)
     assert " ".join(DISCLAIMER_WORDS.split()) in " ".join(html.split())
+    # The documents link works without JS via the same-origin redirect.
+    assert re.search(r'<a id="documents-link" href="/documents"', html)
 
 
 def test_vercel_json_bundles_corpus_into_entrypoint() -> None:

@@ -48,6 +48,7 @@ HOA_QA_FAKE_ASKER=1 CORPUS_PATH=tests/fixtures/mini_corpus.json \
 |---|---|
 | `POST /api/ask` `{"question": "..."}` | An `Answer` JSON (`hoa_qa.models.Answer`) |
 | `GET /api/health` | `{"status": "ok", "corpus_build_time", "chunk_count", "documents_url", "budget_config"}`, or 503 `{"status": "unavailable"}` if the corpus is missing or invalid |
+| `GET /documents` | 307 redirect to `HOA_DOCUMENTS_URL` (re-checked: https, no userinfo; else the default). The page's documents links point here so they work without JS |
 
 `budget_config` is `"ok"` or `"budget_below_reservation"`: the latter means
 `MONTHLY_BUDGET_USD < R`, so every question gets `budget_exhausted`. It reveals
