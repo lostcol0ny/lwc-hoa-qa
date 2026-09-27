@@ -8,6 +8,7 @@ checks that the two copies match.
 from urllib.parse import urlsplit
 
 from starlette.datastructures import MutableHeaders
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # Citation links are plain navigations, which CSP doesn't govern, so the page
@@ -55,15 +56,68 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
-def is_cross_origin(origin: str | None, host: str | None) -> bool:
-    """True when a browser-sent ``Origin`` names a different host than ours.
+Origin = tuple[str, str, int]
+"""A normalized (scheme, hostname, effective port) web origin."""
+
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def parse_origin(value: str) -> Origin | None:
+    """Parse ``scheme://host[:port]`` into a normalized origin; None if malformed.
+
+    Anything a browser wouldn't send as an ``Origin`` (other schemes, a path,
+    userinfo, a bad port, surrounding whitespace, the opaque ``null``) is
+    malformed.
+    """
+    if not value or value != value.strip():
+        return None
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in DEFAULT_PORTS or not parts.hostname:
+        return None
+    if parts.username is not None or parts.password is not None:
+        return None
+    if parts.path or parts.query or parts.fragment:
+        return None
+    return (scheme, parts.hostname.lower(), port or DEFAULT_PORTS[scheme])
+
+
+def request_origin(request: HTTPConnection, *, on_vercel: bool) -> Origin | None:
+    """The origin the browser used to reach us: the trusted external origin.
+
+    On Vercel the function sees an internal connection, so the scheme comes
+    from ``x-forwarded-proto`` (set by Vercel's edge, https by default).
+    Locally it comes from the request URL. The host and port come from
+    ``Host``.
+    """
+    if on_vercel:
+        proto = request.headers.get("x-forwarded-proto", "").split(",")[0]
+        scheme = proto.strip().lower() or "https"
+    else:
+        scheme = request.url.scheme
+    host = request.headers.get("host", "")
+    return parse_origin(f"{scheme}://{host}") if host else None
+
+
+def origin_allowed(request: HTTPConnection, *, on_vercel: bool) -> bool:
+    """Allow a request with no ``Origin`` or a same-origin one; reject the rest.
 
     There's deliberately no CORS middleware: without ``Access-Control-Allow-*``
     headers, browsers block cross-origin reads and JSON preflights. This check
-    also rejects "simple" cross-origin POSTs, which skip the preflight.
+    also rejects "simple" cross-origin POSTs, which skip the preflight, and
+    compares scheme and port as well as host, so ``http://`` doesn't pass for
+    an ``https://`` site.
+
+    A missing ``Origin`` is allowed: browsers send it on every POST, so only
+    non-browser clients (curl, scripts) omit it, and those could forge any
+    value anyway. The rate limits and budget bound them.
     """
-    if not origin:
-        return False
-    if origin == "null" or not host:
+    origin = request.headers.get("origin")
+    if origin is None:
         return True
-    return urlsplit(origin).netloc.lower() != host.lower()
+    expected = request_origin(request, on_vercel=on_vercel)
+    return expected is not None and parse_origin(origin) == expected

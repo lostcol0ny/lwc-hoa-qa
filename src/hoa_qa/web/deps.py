@@ -28,6 +28,14 @@ class AskResult(Protocol):
 
 
 class Asker(Protocol):
+    """Answers one question.
+
+    An asker may also expose ``max_cost_usd: float``, its worst-case cost per
+    call. It's optional (read with ``getattr``), so it isn't a protocol member;
+    when present and larger than ``BUDGET_RESERVE_PER_REQUEST_USD`` it sets the
+    budget reservation.
+    """
+
     async def __call__(self, question: str) -> AskResult: ...
 
 

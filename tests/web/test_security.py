@@ -2,9 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
-from web_fakes import QUESTION, Harness
+from web_fakes import QUESTION, Harness, build_harness
 
-from hoa_qa.web.security import CONTENT_SECURITY_POLICY, SECURITY_HEADERS
+from hoa_qa.web.security import (
+    CONTENT_SECURITY_POLICY,
+    SECURITY_HEADERS,
+    parse_origin,
+)
 
 ROOT = Path(__file__).parents[2]
 
@@ -87,3 +91,86 @@ def test_null_origin_is_rejected(harness: Harness) -> None:
 def test_api_docs_are_disabled(harness: Harness) -> None:
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert harness.client.get(path).status_code == 404
+
+
+def post_with_origin(h: Harness, origin: str | None, **headers: str):
+    if origin is not None:
+        headers["Origin"] = origin
+    return h.client.post("/api/ask", json={"question": QUESTION}, headers=headers)
+
+
+@pytest.mark.parametrize(
+    ("origin", "status"),
+    [
+        ("http://testserver", 200),
+        ("http://testserver:80", 200),  # explicit default port
+        ("HTTP://TestServer", 200),  # scheme and host are case-insensitive
+        ("https://testserver", 403),  # scheme mismatch
+        ("https://testserver:80", 403),
+        ("http://testserver:8080", 403),  # port mismatch
+        ("http://testserver.evil.example", 403),
+    ],
+)
+def test_origin_compares_scheme_host_and_port(
+    harness: Harness, origin: str, status: int
+) -> None:
+    assert post_with_origin(harness, origin).status_code == status
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "",
+        "null",
+        "testserver",
+        "http://",
+        "http://testserver:abc",
+        "http://testserver:99999",
+        "http://[::1",
+        "http://user@testserver",
+        "http://testserver/",
+        "http://testserver/path",
+        "http://testserver?x=1",
+        " http://testserver",
+        "javascript:alert(1)",
+        "ftp://testserver",
+    ],
+)
+def test_malformed_origin_is_403_not_500(harness: Harness, origin: str) -> None:
+    response = post_with_origin(harness, origin)
+    assert response.status_code == 403
+    assert response.json()["outcome"] == "error"
+    assert harness.asker.questions == []
+
+
+def test_missing_origin_is_allowed(harness: Harness) -> None:
+    """Browsers always send Origin on POST; only non-browser clients omit it."""
+    assert post_with_origin(harness, None).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("origin", "proto", "status"),
+    [
+        ("https://hoa.example", "https", 200),
+        ("https://hoa.example:443", "https", 200),  # explicit default port
+        ("http://hoa.example", "https", 403),  # downgraded scheme
+        ("https://hoa.example", "", 200),  # Vercel serves https by default
+        ("http://hoa.example", "http", 200),
+        ("https://other.example", "https", 403),
+    ],
+)
+def test_origin_on_vercel_uses_forwarded_proto(
+    origin: str, proto: str, status: int
+) -> None:
+    h = build_harness(on_vercel=True)
+    headers = {"host": "hoa.example", "x-forwarded-for": "203.0.113.5"}
+    if proto:
+        headers["x-forwarded-proto"] = proto
+    assert post_with_origin(h, origin, **headers).status_code == status
+
+
+def test_parse_origin_normalizes_default_ports() -> None:
+    assert parse_origin("https://Hoa.Example") == ("https", "hoa.example", 443)
+    assert parse_origin("http://hoa.example:8080") == ("http", "hoa.example", 8080)
+    assert parse_origin("http://hoa.example:") == ("http", "hoa.example", 80)
+    assert parse_origin("null") is None

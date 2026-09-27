@@ -1,30 +1,24 @@
 import asyncio
-import json
 import math
 from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import pytest
-from web_fakes import FixedClock
+from web_fakes import UPSTASH_ENV, FakeUpstash, FixedClock, upstash_store
 
 from hoa_qa.budget import (
     BUDGET_TTL_SECONDS,
+    RESERVE_SCRIPT,
     CounterBudgetStore,
     FailClosedBudgetStore,
     InMemoryBudgetStore,
     InMemoryCounterStore,
-    UpstashBudgetStore,
     UpstashCounterStore,
     UpstashError,
     month_key,
     select_budget_store,
     select_counter_store,
 )
-
-UPSTASH_ENV = {
-    "UPSTASH_REDIS_REST_URL": "https://example-upstash.io",
-    "UPSTASH_REDIS_REST_TOKEN": "test-token",
-}
 
 
 def test_month_key_is_utc_calendar_month() -> None:
@@ -83,47 +77,6 @@ def test_fail_closed_store_reports_infinite_spend() -> None:
     assert asyncio.run(FailClosedBudgetStore().get_month_spend()) == math.inf
 
 
-class FakeUpstash:
-    """A tiny Redis emulation behind the Upstash REST wire format."""
-
-    def __init__(self) -> None:
-        self.data: dict[str, str] = {}
-        self.ttls: dict[str, int] = {}
-        self.requests: list[tuple[str, object, str | None]] = []
-
-    def run(self, command: list[str]) -> object:
-        name, key, *args = command
-        if name == "GET":
-            return self.data.get(key)
-        if name == "INCRBYFLOAT":
-            value = float(self.data.get(key, "0")) + float(args[0])
-            self.data[key] = repr(value)
-            return self.data[key]
-        if name == "EXPIRE":
-            self.ttls[key] = int(args[0])
-            return 1
-        raise AssertionError(f"unexpected command {name}")
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        self.requests.append(
-            (request.url.path, body, request.headers.get("authorization"))
-        )
-        if request.url.path == "/multi-exec":
-            return httpx.Response(200, json=[{"result": self.run(c)} for c in body])
-        return httpx.Response(200, json={"result": self.run(body)})
-
-
-def upstash_store(fake: FakeUpstash, clock: FixedClock) -> UpstashBudgetStore:
-    client = httpx.AsyncClient(transport=httpx.MockTransport(fake.handler))
-    return UpstashBudgetStore(
-        UPSTASH_ENV["UPSTASH_REDIS_REST_URL"],
-        UPSTASH_ENV["UPSTASH_REDIS_REST_TOKEN"],
-        clock=clock,
-        client=client,
-    )
-
-
 def test_upstash_budget_store_round_trip() -> None:
     fake = FakeUpstash()
     store = upstash_store(fake, FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
@@ -143,7 +96,7 @@ def test_upstash_budget_store_round_trip() -> None:
     assert paths == ["/", "/multi-exec", "/multi-exec", "/"]
     _, first_incr, auth = fake.requests[1]
     assert first_incr == [
-        ["INCRBYFLOAT", "budget:2026-09", "0.0125000000"],
+        ["INCRBYFLOAT", "budget:2026-09", "0.012500000000"],
         ["EXPIRE", "budget:2026-09", str(BUDGET_TTL_SECONDS)],
     ]
     assert auth == "Bearer test-token"
@@ -166,3 +119,99 @@ def test_upstash_errors_raise(response: httpx.Response) -> None:
         asyncio.run(store.incr("k", 1, 10))
     with pytest.raises(UpstashError):
         asyncio.run(store.get("k"))
+
+
+def test_in_memory_reserve_respects_limit() -> None:
+    store = InMemoryBudgetStore(clock=FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+
+    async def scenario() -> list[bool]:
+        return [await store.reserve(0.05, 0.15) is not None for _ in range(4)]
+
+    assert asyncio.run(scenario()) == [True, True, True, False]
+    assert math.isclose(asyncio.run(store.get_month_spend()), 0.15)
+
+
+def test_reserve_rejects_invalid_amounts() -> None:
+    store = InMemoryBudgetStore()
+    for bad in (0.0, -1.0, math.nan, math.inf):
+        with pytest.raises(ValueError):
+            asyncio.run(store.reserve(bad, 1.0))
+    with pytest.raises(ValueError):
+        asyncio.run(store.reserve(0.05, math.inf))
+    reservation = asyncio.run(store.reserve(0.05, 1.0))
+    assert reservation is not None
+    with pytest.raises(ValueError):
+        asyncio.run(store.reconcile(reservation, -0.01))
+
+
+def test_reconcile_settles_against_the_reserving_month() -> None:
+    clock = FixedClock(datetime(2026, 9, 30, 23, 59, 59, tzinfo=UTC))
+    store = InMemoryBudgetStore(clock=clock)
+
+    async def scenario() -> tuple[float, float]:
+        reservation = await store.reserve(0.05, 1.0)
+        assert reservation is not None and reservation.key == "budget:2026-09"
+        clock.now = datetime(2026, 10, 1, 0, 0, 1, tzinfo=UTC)
+        await store.reconcile(reservation, 0.01)
+        october = await store.get_month_spend()
+        clock.now = datetime(2026, 9, 30, 23, 59, 59, tzinfo=UTC)
+        return await store.get_month_spend(), october
+
+    september, october = asyncio.run(scenario())
+    assert math.isclose(september, 0.01)
+    assert october == 0.0
+
+
+def test_fail_closed_store_admits_nothing() -> None:
+    assert asyncio.run(FailClosedBudgetStore().reserve(0.05, 100.0)) is None
+
+
+def test_upstash_reserve_uses_eval_and_reconciles() -> None:
+    fake = FakeUpstash()
+    store = upstash_store(fake, FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+
+    async def scenario() -> tuple[bool, float]:
+        first = await store.reserve(0.05, 0.08)
+        second = await store.reserve(0.05, 0.08)  # 0.10 > 0.08: refused
+        assert first is not None
+        await store.reconcile(first, 0.01)
+        return second is None, await store.get_month_spend()
+
+    second_refused, total = asyncio.run(scenario())
+    assert second_refused
+    assert math.isclose(total, 0.01)
+    _, eval_body, _ = fake.requests[0]
+    assert eval_body == [
+        "EVAL",
+        RESERVE_SCRIPT,
+        1,
+        "budget:2026-09",
+        "0.050000000000",
+        "0.080000000000",
+        str(BUDGET_TTL_SECONDS),
+        "0.000000001000",
+    ]
+    # Reconcile is a negative INCRBYFLOAT on the reservation's key.
+    _, reconcile_body, _ = fake.requests[2]
+    assert reconcile_body == [
+        ["INCRBYFLOAT", "budget:2026-09", "-0.040000000000"],
+        ["EXPIRE", "budget:2026-09", str(BUDGET_TTL_SECONDS)],
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, json={"result": "OK"}),
+        httpx.Response(200, json={"result": [2, "0.1"]}),
+        httpx.Response(200, json={"result": [1]}),
+        httpx.Response(200, json={"result": [1, "nope"]}),
+        httpx.Response(200, json={"error": "ERR script"}),
+        httpx.Response(503, text="unavailable"),
+    ],
+)
+def test_upstash_reserve_errors_raise(response: httpx.Response) -> None:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: response))
+    store = UpstashCounterStore("https://example-upstash.io", "t", client=client)
+    with pytest.raises(UpstashError):
+        asyncio.run(store.reserve("k", 0.05, 1.0, 10))
