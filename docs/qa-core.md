@@ -16,12 +16,13 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 | Step | Module | What happens | Outcome if it stops here |
 |---|---|---|---|
 | 1. Validate | `ask.clean_question` | Drop control (`Cc`) and format (`Cf`, e.g. zero-width, bidi) characters, collapse whitespace, then require 1–500 characters. No model calls. | `invalid_input` |
-| 2. Gate | `retrieval/gate.py` | One Jev `Noul`: "Is `message` a question about the Lakewood Creek HOA, its rules, governance, fees, amenities, or neighborhood?" The question is sent as state (data), never inside the instructions. | `refused_off_topic`, with a link to the documents; the answer model is never called |
-| 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does this passage help answer the question?"), batched **one request per `doc_id`**. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` ("couldn't find it; contact the Board") with no free-form answer |
+| 2. Gate | `retrieval/gate.py` | One Jev `Noul`: is `message` a question a resident might ask their HOA (its rules, fees, governance, amenities, or anything about a home, yard, or life in the neighborhood that HOA rules could cover)? The criteria list examples (decorations, antennas, fences, sheds, trash cans, parking, pets, neighbor issues as HOA matters). The gate only keeps out abuse and off-topic use (poems, homework, chat, bare instructions); whether the documents answer is the sweep's job. The question is sent as state (data), never inside the instructions. | `refused_off_topic`, with a link to the documents; the answer model is never called |
+| 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does the passage `passages.p3` (heading: …) help answer the question?"; a passage that answers part of it counts), batched **per `doc_id`, at most 8 passages per request**. Passages are keyed by name, not list position, and each question repeats its passage's heading: with positional references (`passages[30]`) in long lists the judge scored neighbors instead of the passage asked about. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` ("couldn't find it; contact the Board") with no free-form answer |
 | 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, quote}`. The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. | `not_found` if the model returns no claims |
-| 5a. Quote check | `verify/quotes.py` | Per citation: the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, and curly quotes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
-| 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
-| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. Then apply the drop rule below. | `not_found` |
+| 5a. Quote check | `verify/quotes.py` | Per citation: the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, curly quotes, ellipses (`…` = `...`) and dashes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
+| 5a′. Authority rule | `ask.py` | See [Source authority](#source-authority-support-is-not-authority). An `answer` claim may only rest on citations outside `informal`/`superseded` when a `governing`/`rules`/`board_decision` passage was provided. | |
+| 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Each passage carries its `source` (citation label), `authority` and `effective_date` from the corpus next to its `text`, so attributions ("under the 2023 Rules") can be judged. Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
+| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims, each with a code-written reason (quote not found, not fully supported, informal-only, informal-as-current), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. If a claim broke the authority rule, the retry also says so. Then apply the drop rule below. | `not_found` |
 | 6. Respond | `ask.py` | Compose the `Answer` from verified claims only (see below): `Citation.url = citation_url(chunk)`, the §5 disclaimer, and a uuid4 `request_id`. | `answered` |
 
 ### How the answer text is built, and the claim-drop rule
@@ -33,15 +34,49 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 - `conflicts_noted` is the verified `conflict` claims' statements.
 - `citations` is the verified claims' quote-checked citations, deduplicated.
 - **Drop rule** (after the one regenerate):
-  - If any **essential** claim still fails, the result is `not_found`.
+  - If any **essential** `answer` claim still fails, the result is `not_found`.
   - If no `answer` claim survives, the result is `not_found`.
-  - Otherwise the failed non-essential claims are dropped, the survivors are
-    returned as `answered`, and `OMITTED_NOTE` is appended.
+  - Otherwise the failed claims are dropped, the survivors are returned as
+    `answered`, and `OMITTED_NOTE` is appended.
+  - If the regenerated draft can't stand (or is invalid, or empty) but the
+    first draft could under this rule, the first draft is used, with its
+    failed claims dropped. Its surviving claims were verified the same way.
 
-  The `essential` flag can only make the outcome stricter. Unverified text is
-  never shown whatever the flag says.
+  A failed `conflict` claim never blocks the answer, even if marked essential:
+  the verified answer is correct without the note. The `essential` flag can
+  only make the outcome stricter. Unverified text is never shown whatever the
+  flag says.
+- Model output that breaks a cap is salvaged when nothing essential is lost:
+  citations past 3 are cut, and malformed, over-long, or surplus
+  non-essential claims are dropped (never shown). Otherwise the draft is
+  invalid, as before.
 - The pipeline never returns `answered` with zero citations: every surviving
   claim has at least one quote-checked citation.
+
+### Source authority: support is not authority
+
+The first live eval answered "Under the current rules, the fine for a second
+violation is $50.00", citing only an informal 2022 blog post that quotes the
+superseded 2016 schedule. The support check passed, correctly: the blog does
+say $50. So the authority order is also enforced in code (`ask.py`,
+`AUTHORITATIVE` / `LOW_AUTHORITY`), not left to the prompt:
+
+- When any provided passage is `governing`, `rules`, or `board_decision`, an
+  `answer` claim is judged only on its citations that are not `informal` or
+  `superseded`. Low-authority citations are removed before the support check
+  (a claim can't borrow support from the blog by also citing the Rules) and
+  are not shown. A claim left with no citation fails as `low_authority`, and
+  the retry explains the rule.
+- `conflict` claims are exempt: reporting what an informal or superseded
+  source says, in `conflicts_noted`, is what they are for.
+- Without an authoritative passage, an informal-only `answer` claim may stand
+  (the prompt makes the model label it informal), unless it presents itself
+  as current ("current", "currently", "in effect", "now in force"), which
+  fails as `informal_as_current`.
+- `website` (the Board-run site: the dues banner, the FAQ, About) and `form`
+  are official HOA publications and are **not** low-authority. The dues
+  banner is the only source for the current assessment, and the FAQ answers
+  the pool questions.
 
 Any exception from a provider becomes `Outcome.error`. The log records only the
 exception *type*, because SDK error messages can echo request bodies. When Jev
@@ -54,6 +89,22 @@ sees that spend. A billed response that is malformed counts too:
   costs to the successful siblings' costs.
 - An Anthropic response whose structured output fails validation returns its
   usage with `draft=None`, which is counted before the retry.
+
+## Eval diagnostics
+
+`QAAsker.ask_traced(question, trace)` runs the same pipeline and reports each
+stage to an `AskTrace` (`hoa_qa/trace.py`): the gate score, every chunk's
+sweep score, the passages sent to the answer model, and each draft claim with
+its citations (quote, authority, quote check, whether it was used), support
+score, and kept/dropped reason, plus the provider's parse note for invalid or
+salvaged drafts. `QAAsker.__call__`, which the web app uses, passes
+`NO_TRACE`, whose methods do nothing, so production never records or logs any
+of it.
+
+`hoa-qa eval` always installs a `DiagnosticsRecorder` per golden case and
+writes it to the JSON report under `cases[].diagnostics` (the top 20 sweep
+scores). It's always on because the manual **Eval** workflow has no input
+for it, and the golden questions are committed fixtures, not user input.
 
 ## Configuration
 

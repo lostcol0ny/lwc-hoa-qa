@@ -174,7 +174,9 @@ Do these in order.
 2. Run the **Build corpus** workflow (Actions → Build corpus → Run workflow).
    Leave `llm_cleanup` off unless you want the guarded OCR repair.
 3. Run the **Eval** workflow and review the uploaded `eval-results` (per-case
-   checks, answers, total cost). Tune `GATE_THRESHOLD`, `SWEEP_THRESHOLD`,
+   checks, answers, total cost, and per-case diagnostics: gate and sweep
+   scores, passages sent, and why each draft claim was kept or dropped; see
+   docs/qa-core.md "Eval diagnostics"). Tune `GATE_THRESHOLD`, `SWEEP_THRESHOLD`,
    `SUPPORT_THRESHOLD` or `SWEEP_TOP_K` until it passes (default bar 85%), then
    pin `JEV_MODEL`.
 4. Set provider-side spend limits in the Anthropic console (and at TypeSafe if
