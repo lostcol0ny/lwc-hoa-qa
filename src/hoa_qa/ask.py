@@ -78,6 +78,7 @@ from hoa_qa.verify.support import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_DOCUMENTS_URL = "https://lakewoodcreekhoa.com/"
+DEFAULT_JEV_MODEL = "jev-1.13.0"
 
 DISCLAIMER = (
     "Unofficial tool, not legal advice; the governing documents and the Board "
@@ -99,8 +100,10 @@ OMITTED_NOTE = (
 # none fails verification ("low_authority"): an informal blog quoting an old
 # fine schedule can never be stated as fact next to the current Rules. The
 # model may still report such a source as a "conflict" claim, which is shown
-# in conflicts_noted. Without an authoritative passage, a low-authority-only
-# answer claim may stand, unless it presents itself as current.
+# in conflicts_noted, but never as current: a conflict claim citing a
+# low-authority passage fails if it presents itself as current. Without an
+# authoritative passage, a low-authority-only answer claim may stand, unless
+# it presents itself as current.
 # `website` (the Board-run site, including the FAQ and the dues banner) and
 # `form` are official HOA publications and are not LOW_AUTHORITY.
 AUTHORITATIVE = frozenset(
@@ -108,7 +111,22 @@ AUTHORITATIVE = frozenset(
 )
 LOW_AUTHORITY = frozenset({Authority.informal, Authority.superseded})
 _PRESENTS_AS_CURRENT = re.compile(
-    r"\b(current|currently|in effect|now in force)\b", re.IGNORECASE
+    r"\b(current|currently|in effect|in force|as of now|presently|at present|"
+    r"today|now)\b",
+    re.IGNORECASE,
+)
+# A match right after one of these reads as "not current" ("no longer in
+# effect", "was in force"), and "now" right before one of the words after it
+# reads as outdated ("now superseded").
+_NEGATED_BEFORE = re.compile(
+    r"\b(no longer|not|never|formerly|previously|was|were|isn't|aren't|wasn't)"
+    r"(\s+\w+)?\s*$",
+    re.IGNORECASE,
+)
+_OUTDATED_AFTER = re.compile(
+    r"^\s*(\w+\s+)?(superseded|outdated|obsolete|replaced|repealed|expired|"
+    r"out of date|no longer)\b",
+    re.IGNORECASE,
 )
 
 # Framing the Messages API adds beyond the prompt text and the output schema
@@ -124,7 +142,10 @@ class QASettings(BaseModel):
     typesafe_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     answer_model: str = DEFAULT_ANSWER_MODEL
-    jev_model: str = "jev-latest"
+    # Pinned: the version the thresholds were tuned against (the alias
+    # jev-latest pointed to it during tuning). Re-run the eval and re-tune
+    # before bumping it.
+    jev_model: str = DEFAULT_JEV_MODEL
     gate_threshold: float = Field(default=0.5, ge=0, le=1)
     sweep_threshold: float = Field(default=0.3, ge=0, le=1)
     sweep_top_k: int = Field(default=8, ge=1)
@@ -234,10 +255,16 @@ def _authority_screen(
     """Apply the authority rule: the citations an answer claim may rest on.
 
     Returns the usable citations and, if the rule rejects the claim, why.
-    Conflict claims are exempt: reporting what an older or informal source
-    says is exactly what they are for.
+    Conflict claims keep their citations (reporting what an older or informal
+    source says is what they are for), but one citing a low-authority passage
+    must not present it as current.
     """
-    if claim.kind != "answer" or not citations:
+    if not citations:
+        return citations, None
+    if claim.kind != "answer":
+        low = any(c.chunk.authority in LOW_AUTHORITY for c in citations)
+        if low and presents_as_current(claim.statement):
+            return (), "informal_as_current"
         return citations, None
     strong = tuple(c for c in citations if c.chunk.authority not in LOW_AUTHORITY)
     if strong:
@@ -245,9 +272,24 @@ def _authority_screen(
         return (strong if authoritative else citations), None
     if authoritative:
         return (), "low_authority"
-    if _PRESENTS_AS_CURRENT.search(claim.statement):
+    if presents_as_current(claim.statement):
         return (), "informal_as_current"
     return citations, None
+
+
+def presents_as_current(statement: str) -> bool:
+    """True if the statement calls something current ("currently", "now",
+    "in effect", ...), ignoring negated or past uses ("no longer in effect",
+    "was in force", "now superseded")."""
+    for match in _PRESENTS_AS_CURRENT.finditer(statement):
+        if _NEGATED_BEFORE.search(statement[: match.start()]):
+            continue
+        if match.group(1).lower() == "now" and _OUTDATED_AFTER.match(
+            statement[match.end() :]
+        ):
+            continue
+        return True
+    return False
 
 
 def _claim_trace(
@@ -447,7 +489,8 @@ class QAAsker:
             trace.attempt(attempt + 1, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
             if not failures and _has_answer(verified):
-                return self._answered(draft, verified, dropped=False)
+                # Claims salvage dropped at parse time count as omitted too.
+                return self._answered(draft, verified, dropped=generated.claims_trimmed)
             usage.notes.append(f"claims_failed={len(failures)}")
             if _can_drop(verified):
                 if attempt == 1:

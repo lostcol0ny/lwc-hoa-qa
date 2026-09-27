@@ -8,10 +8,11 @@ citing only the blog. The blog does say $50, so the support check passed.
 
 import asyncio
 
+import pytest
 from qa_fakes import FakeJev, FakeProvider, claim, draft, make_asker
 
 from hoa_qa.answer.prompt import AUTHORITY_FEEDBACK
-from hoa_qa.ask import QASettings
+from hoa_qa.ask import QASettings, presents_as_current
 from hoa_qa.models import Corpus, Outcome
 
 QUESTION = "Under the current rules, what is the fine for a second violation?"
@@ -177,3 +178,96 @@ def test_conflict_claims_may_cite_only_informal_sources(
     assert answer.outcome is Outcome.answered
     assert answer.conflicts_noted == (BLOG_CONFLICT.statement,)
     assert len(provider.prompts) == 1
+
+
+# --- conflict claims never present a low-authority figure as current ---------
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "An informal blog post says the current fine is $50.",
+        "The blog says a 2nd offense is currently $50.",
+        "The 2016 rules, still in effect, list $50.",
+        "As of now, the blog lists $50 for a 2nd offense.",
+        "The blog presently lists $50.",
+        "At present the informal schedule is $50.",
+        "Today the fine is $50 according to the blog.",
+        "The blog says the fine is now $50.",
+        "The older schedule of $50 remains in force.",
+    ],
+)
+def test_conflict_claim_presenting_informal_figure_as_current_is_dropped(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, statement: str
+) -> None:
+    as_current = claim(
+        statement,
+        ("blog-2022-violations", "2nd offense - $50.00 fine"),
+        kind="conflict",
+        essential=False,
+    )
+    provider = FakeProvider([draft(RULES_ANSWER, as_current)] * 2)
+    answer = ask(make_asker(corpus, settings, blog_first(jev), provider)).answer
+    assert answer.outcome is Outcome.answered
+    assert answer.conflicts_noted == ()
+    assert answer.answer_text.startswith(RULES_ANSWER.statement)
+    assert "presents an informal or superseded source as current" in (
+        provider.prompts[1].user
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        BLOG_CONFLICT.statement,
+        "The 2016 rules, no longer in effect, listed $50 for a 2nd offense.",
+        "The 2016 schedule, which was in force until 2023, listed $50.",
+        "An informal blog post lists $50; it is not the current schedule.",
+        "An informal blog post lists $50, a figure now superseded.",
+    ],
+)
+def test_conflict_claim_labeled_as_outdated_is_kept(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, statement: str
+) -> None:
+    labeled = claim(
+        statement,
+        ("blog-2022-violations", "2nd offense - $50.00 fine"),
+        kind="conflict",
+        essential=False,
+    )
+    provider = FakeProvider([draft(RULES_ANSWER, labeled)])
+    answer = ask(make_asker(corpus, settings, blog_first(jev), provider)).answer
+    assert answer.conflicts_noted == (statement,)
+    assert len(provider.prompts) == 1
+
+
+def test_conflict_between_official_sources_may_say_current(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    """The screen targets low-authority figures, not official disagreements."""
+    official = claim(
+        "The current Rules list $75 while the Declaration sets no fine.",
+        ("rules-2023-fines", "2nd violation: $75."),
+        kind="conflict",
+        essential=False,
+    )
+    provider = FakeProvider([draft(RULES_ANSWER, official)])
+    answer = ask(make_asker(corpus, settings, blog_first(jev), provider)).answer
+    assert answer.conflicts_noted == (official.statement,)
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    [
+        ("The fine is currently $50.", True),
+        ("Right now the fine is $50.", True),
+        ("The fine today is $50.", True),
+        ("The known fine was $50.", False),  # "known" is not "now"
+        ("That rule is no longer in effect.", False),
+        ("That rule was in effect in 2016.", False),
+        ("The figure is now outdated.", False),
+        ("The fine was $50 and is now $75.", True),
+    ],
+)
+def test_presents_as_current(statement: str, expected: bool) -> None:
+    assert presents_as_current(statement) is expected
