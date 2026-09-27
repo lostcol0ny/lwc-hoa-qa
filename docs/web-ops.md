@@ -175,8 +175,9 @@ questions early but never spends past the cap.
 
 Consequences:
 - If `MONTHLY_BUDGET_USD < R`, nothing is admitted; `/api/health` reports
-  `"budget_config": "budget_below_reservation"` only when there is no Redis
-  config error, and a WARNING is logged.
+  `"budget_config": "budget_below_reservation"` (unless a Redis problem,
+  `redis_config_incomplete` or `redis_not_configured`, is reported first),
+  and a WARNING is logged either way.
 - Near the cap, questions are refused while `spend + R > B`, even if the real
   cost would have fit. That margin (at most R) goes unused.
 - Provider-side spend limits (Anthropic console, TypeSafe if offered) remain a
