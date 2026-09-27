@@ -298,6 +298,24 @@ main { flex: 1; padding-bottom: 2rem; }
 .dots span:nth-child(2) { animation-delay: 0.15s; background: var(--beam-3); }
 .dots span:nth-child(3) { animation-delay: 0.3s; background: var(--beam-1); }
 
+/* Status lines while an answer is prepared: stacked in one grid cell so the
+   outgoing line fades out underneath the incoming one. */
+.progress-lines { display: grid; min-width: 0; }
+.progress-line {
+  grid-area: 1 / 1;
+  animation: progress-in 0.35s ease-out both;
+}
+.progress-line.is-leaving { animation: progress-out 0.25s ease-in both; }
+
+@keyframes progress-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes progress-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 @keyframes pulse {
   0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }
@@ -416,6 +434,8 @@ h3 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform
   .beam-glow { display: none; }
   .composer.is-busy .beam::before { opacity: 0.6; }
   .dots span { animation: none; opacity: 0.7; }
+  .progress-line { animation: none; } /* text still changes, just without the fade */
+  .progress-line.is-leaving { display: none; }
   .spinner { animation: none; } /* the loading text already says it's working */
   .send { transition: none; }
 }

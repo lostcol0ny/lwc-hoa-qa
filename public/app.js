@@ -50,8 +50,96 @@ function keyAction(event, state) {
   return "submit"; // plain Enter, and Ctrl/Cmd+Enter
 }
 
+// Status lines shown while an answer is being prepared, keyed by elapsed time.
+// They describe what the service is doing in general and never claim a step
+// has finished; the server doesn't report progress, so this is a client-side
+// schedule only. Only lines marked `announce` reach screen readers.
+const PROGRESS_STAGES = Object.freeze([
+  { at: 0, text: "Checking your question…", announce: true },
+  { at: 1500, text: "Searching the HOA documents and Illinois law…", announce: false },
+  { at: 6000, text: "Writing an answer with citations…", announce: false },
+  { at: 10000, text: "Double-checking the citations…", announce: false },
+  {
+    at: 18000,
+    text: "Still working. Some questions take up to half a minute.",
+    announce: true,
+  },
+]);
+
+// Index into PROGRESS_STAGES for a request that has been in flight for
+// elapsedMs. Bad or negative input means "just started".
+function progressStage(elapsedMs) {
+  let index = 0;
+  if (!(elapsedMs > 0)) return index;
+  while (index + 1 < PROGRESS_STAGES.length && elapsedMs >= PROGRESS_STAGES[index + 1].at) {
+    index += 1;
+  }
+  return index;
+}
+
+// Drives PROGRESS_STAGES for one request at a time. It holds at most one
+// pending timer, armed for the next stage boundary, and stop() cancels it, so
+// nothing outlives a finished request. The clock and timer functions are
+// injectable for tests.
+function createProgress(options) {
+  const now = options.now;
+  const setTimer = options.setTimer;
+  const clearTimer = options.clearTimer;
+  const onStage = options.onStage;
+  const onStop = options.onStop || function () {};
+  let timer = null;
+  let running = false;
+  let startedAt = 0;
+  let current = -1;
+
+  function tick() {
+    timer = null;
+    if (!running) return;
+    const elapsed = now() - startedAt;
+    const index = progressStage(elapsed);
+    if (index !== current) {
+      current = index;
+      onStage(PROGRESS_STAGES[index], index);
+    }
+    const next = PROGRESS_STAGES[index + 1];
+    if (next) timer = setTimer(tick, Math.max(0, next.at - elapsed));
+  }
+
+  function stop() {
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+    if (!running) return;
+    running = false;
+    current = -1;
+    onStop();
+  }
+
+  function start() {
+    stop();
+    running = true;
+    startedAt = now();
+    tick();
+  }
+
+  return {
+    start: start,
+    stop: stop,
+    isRunning: function () {
+      return running;
+    },
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { groupCitations, normalizeQuote, isHttpsUrl, keyAction };
+  module.exports = {
+    groupCitations,
+    normalizeQuote,
+    isHttpsUrl,
+    keyAction,
+    PROGRESS_STAGES,
+    progressStage,
+    createProgress,
+  };
 }
 
 if (typeof document !== "undefined") {
@@ -66,6 +154,7 @@ if (typeof document !== "undefined") {
     const button = document.getElementById("ask-button");
     const buttonLabel = document.getElementById("ask-button-label");
     const answerRegion = document.getElementById("answer");
+    const progressStatus = document.getElementById("progress-status");
     let composing = false;
 
     const OUTCOMES = {
@@ -105,14 +194,53 @@ if (typeof document !== "undefined") {
       counter.classList.toggle("near-limit", length >= MAX_CHARS - 50);
     }
 
+    // The rotating lines are visual only (aria-hidden). Screen readers hear
+    // the separate #progress-status region, which carries just the announced
+    // stages: the first line and, for slow answers, the "still working" one.
+    let progressLines = null;
+
     function renderLoading() {
       const loading = el("div", "loading");
+      loading.setAttribute("aria-hidden", "true");
       const dots = el("span", "dots");
-      dots.setAttribute("aria-hidden", "true");
       dots.append(el("span"), el("span"), el("span"));
-      loading.append(dots, el("span", null, "Searching the HOA documents…"));
+      progressLines = el("span", "progress-lines");
+      progressLines.addEventListener("animationend", function (event) {
+        if (event.target.classList.contains("is-leaving")) event.target.remove();
+      });
+      loading.append(dots, progressLines);
       answerRegion.replaceChildren(loading);
     }
+
+    function showProgressLine(text) {
+      if (!progressLines) return;
+      // Drop lines still fading out from an earlier change, then fade the
+      // current line out underneath the new one (see .progress-line).
+      for (const old of progressLines.querySelectorAll(".is-leaving")) old.remove();
+      for (const line of progressLines.children) line.classList.add("is-leaving");
+      const line = el("span", "progress-line", text);
+      progressLines.append(line);
+    }
+
+    const progress = createProgress({
+      now: function () {
+        return performance.now();
+      },
+      setTimer: function (fn, ms) {
+        return window.setTimeout(fn, ms);
+      },
+      clearTimer: function (id) {
+        window.clearTimeout(id);
+      },
+      onStage: function (stage) {
+        showProgressLine(stage.text);
+        if (stage.announce) progressStatus.textContent = stage.text;
+      },
+      onStop: function () {
+        progressLines = null;
+        progressStatus.textContent = "";
+      },
+    });
 
     function setLoading(loading) {
       button.disabled = loading;
@@ -120,7 +248,12 @@ if (typeof document !== "undefined") {
       composer.classList.toggle("is-busy", loading);
       form.setAttribute("aria-busy", loading ? "true" : "false");
       answerRegion.setAttribute("aria-busy", loading ? "true" : "false");
-      if (loading) renderLoading();
+      if (loading) {
+        renderLoading();
+        progress.start();
+      } else {
+        progress.stop();
+      }
     }
 
     function renderSourceGroup(group) {
