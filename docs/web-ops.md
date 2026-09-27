@@ -29,17 +29,32 @@ HOA_QA_FAKE_ASKER=1 CORPUS_PATH=tests/fixtures/mini_corpus.json \
 - Locally, the app serves `public/` itself. On Vercel it doesn't (the CDN does),
   because Vercel's FastAPI docs say not to mount `public/`.
 - Without `HOA_QA_FAKE_ASKER=1`, the app builds the real asker through
-  `hoa_qa.ask.build_asker(corpus, QASettings)` on the first question. If
-  `hoa_qa.ask` isn't installed, `/api/ask` returns HTTP 503 with an
-  `Answer`-shaped body saying the service isn't set up yet.
-- `HOA_QA_FAKE_ASKER` is ignored when `VERCEL_ENV=production`.
+  `hoa_qa.ask.build_asker(corpus, QASettings.from_env(env))` on the first
+  question. If the API keys are missing (or any QA setting is invalid),
+  `/api/ask` returns HTTP 503 with an `Answer`-shaped body saying the service
+  isn't set up yet; only the exception *type* is logged.
+- The web `Asker`/`AskResult` protocols (`src/hoa_qa/web/deps.py`) use
+  read-only properties, and `build_asker` assigns the QA core's `QAAsker` to
+  `Asker`, so pyright fails the build if the two units' contracts drift.
+- On shutdown (FastAPI lifespan) the app awaits `aclose()` on the asker (which
+  closes the Jev and Anthropic clients) and on the Upstash client.
+- `HOA_QA_FAKE_ASKER` is ignored when `VERCEL_ENV=production`, and
+  `build_asker` re-checks `settings.production`, so the fake can't be served
+  in production even from a hand-built settings object.
 
 ## API
 
 | Route | Result |
 |---|---|
 | `POST /api/ask` `{"question": "..."}` | An `Answer` JSON (`hoa_qa.models.Answer`) |
-| `GET /api/health` | `{"status": "ok", "corpus_build_time", "chunk_count", "documents_url"}`, or 503 `{"status": "unavailable"}` if the corpus is missing or invalid |
+| `GET /api/health` | `{"status": "ok", "corpus_build_time", "chunk_count", "documents_url", "budget_config"}`, or 503 `{"status": "unavailable"}` if the corpus is missing or invalid |
+
+`budget_config` is `"ok"` or `"budget_below_reservation"`: the latter means
+`MONTHLY_BUDGET_USD < R`, so every question gets `budget_exhausted`. It reveals
+neither amount. Until the first question builds the asker, R is the env default
+`BUDGET_RESERVE_PER_REQUEST_USD`; afterwards it includes the asker's
+`max_cost_usd`. The same condition is logged as a WARNING at startup (env
+default R) and once more on the first question (real R).
 
 Every `/api/ask` response body is `Answer`-shaped, so the page renders them all
 the same way:
@@ -78,7 +93,20 @@ it logs a warning.
 
 Each request's cost is the asker's `estimated_cost_usd` (Jev gate + sweep +
 verify, plus the answer model; see `docs/qa-core.md`). The budget counter is
-`budget:YYYY-MM` (UTC calendar month) with a 40-day TTL.
+`budget_micros:YYYY-MM` (UTC calendar month) with a 40-day TTL.
+
+**Units.** Budget counters hold **integer micro-dollars** (1 µ$ = $0.000001),
+updated with `INCRBY`, never `INCRBYFLOAT`. Dollars are converted only at the
+edges (`usd_to_micros`, `usd_limit_to_micros`, `micros_to_usd` in
+`src/hoa_qa/budget.py`): charges and reservations round **up** to the next
+µ$, the budget limit rounds **down**, so rounding can only refuse early.
+Sums are exact, with no float drift and no epsilon.
+
+**Old float keys.** Before this change the counter was `budget:YYYY-MM`, written
+with `INCRBYFLOAT`. The new `budget_micros:` prefix means such a value can never
+reach `INCRBY` (which would reject a non-integer and fail every reservation
+closed). The app was never launched on the old keys, so there's no migration:
+any leftover `budget:*` key is ignored and expires on its own 40-day TTL.
 
 ### Reserve, then reconcile
 
@@ -91,12 +119,19 @@ verify, plus the answer model; see `docs/qa-core.md`). The budget counter is
    `max_cost_usd` is optional on the asker (read with `getattr`); invalid values
    are ignored.
    - Upstash: one `EVAL` of a Lua script (`RESERVE_SCRIPT` in
-     `src/hoa_qa/budget.py`) that does GET → compare → `INCRBYFLOAT` → `EXPIRE`.
+     `src/hoa_qa/budget.py`) that does GET → compare → `INCRBY` → `EXPIRE`.
      Upstash runs a script as a single atomic step under a lock, so concurrent
      reservations can't interleave
      ([EVAL](https://upstash.com/docs/redis/commands/scripting/eval), which is
      also available over the REST API as a JSON-array POST).
    - In memory (dev/tests): the same check-and-add under an `asyncio.Lock`.
+     The critical section awaits between the read and the write (as a network
+     store would), so without the lock requests really interleave; a test
+     swaps the lock for a no-op and asserts that reservations then overspend,
+     which proves the concurrency tests can catch a missing lock.
+   - Tests run `RESERVE_SCRIPT` itself under [lupa](https://pypi.org/project/lupa/)
+     (a dev dependency), with `redis.call` bound to the fake Upstash, so the
+     Lua is exercised, not a Python re-implementation of it.
 2. **Refuse on any failure.** If the reservation doesn't fit, or the store
    errors (for example Redis reads work but writes fail), the request gets
    `outcome=budget_exhausted` and **the asker is never called**.
@@ -123,12 +158,15 @@ request whose actual cost exceeds its reservation:
 `worst-case overspend = Σ max(0, actual_i − R_i)`
 
 That is **zero** when the asker's `max_cost_usd` is an honest upper bound (or R
-is set at or above the true per-request maximum). Every accounting failure
+is set at or above the true per-request maximum). The counter itself is
+**exact to 1 µ$**: amounts are integers, and each conversion from dollars
+rounds against spending (costs up, the limit down). Every accounting failure
 errs the other way: it keeps reservations and over-counts, which can refuse
 questions early but never spends past the cap.
 
 Consequences:
-- If `MONTHLY_BUDGET_USD < R`, nothing is admitted.
+- If `MONTHLY_BUDGET_USD < R`, nothing is admitted; `/api/health` reports
+  `"budget_config": "budget_below_reservation"` and a WARNING is logged.
 - Near the cap, questions are refused while `spend + R > B`, even if the real
   cost would have fit. That margin (at most R) goes unused.
 - Provider-side spend limits (Anthropic console, TypeSafe if offered) remain a
@@ -224,7 +262,11 @@ never reach the app (a test keeps the two copies identical):
     the function itself sees an internal connection. Locally it comes from the
     request URL.
   - Malformed origins get 403, never a 500: `null`, other schemes, paths,
-    userinfo, bad ports, whitespace.
+    userinfo, bad ports, whitespace. The default port is filled in only when
+    no port is given, so an explicit `:0` is rejected rather than treated as
+    443. Control characters and `?`/`#` are rejected **before** parsing,
+    because `urlsplit` silently strips tabs/newlines and drops an empty
+    query or fragment (`https://hoa.example?`).
   - **A missing `Origin` is allowed.** Browsers send `Origin` on every POST, so
     only non-browser clients omit it, and they could forge any value anyway.
     The rate limits and budget cover them.

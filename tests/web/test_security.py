@@ -174,3 +174,31 @@ def test_parse_origin_normalizes_default_ports() -> None:
     assert parse_origin("http://hoa.example:8080") == ("http", "hoa.example", 8080)
     assert parse_origin("http://hoa.example:") == ("http", "hoa.example", 80)
     assert parse_origin("null") is None
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://hoa.example:0",  # explicit port 0 is not "the default port"
+        "http://hoa.example:0",
+        "https://hoa.example?",  # empty query: urlsplit would drop it
+        "https://hoa.example#",  # empty fragment
+        "https://hoa.example?x=1",
+        "https://hoa.example#top",
+        "https://hoa.\texample",  # urlsplit strips tabs and newlines
+        "https://hoa.example\n",
+        "https://hoa.exa\rmple",
+        "https://hoa.example\x00",
+        "https://hoa.example\x7f",
+    ],
+)
+def test_parse_origin_rejects_regressions(origin: str) -> None:
+    assert parse_origin(origin) is None
+
+
+def test_explicit_port_zero_does_not_match_the_default_port() -> None:
+    h = build_harness(on_vercel=True)
+    headers = {"host": "hoa.example", "x-forwarded-for": "203.0.113.5"}
+    assert post_with_origin(h, "https://hoa.example", **headers).status_code == 200
+    assert post_with_origin(h, "https://hoa.example:0", **headers).status_code == 403
+    assert post_with_origin(h, "https://hoa.example?", **headers).status_code == 403

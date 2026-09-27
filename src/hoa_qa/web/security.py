@@ -66,10 +66,14 @@ def parse_origin(value: str) -> Origin | None:
     """Parse ``scheme://host[:port]`` into a normalized origin; None if malformed.
 
     Anything a browser wouldn't send as an ``Origin`` (other schemes, a path,
-    userinfo, a bad port, surrounding whitespace, the opaque ``null``) is
-    malformed.
+    userinfo, a bad or explicit ``0`` port, surrounding whitespace, the opaque
+    ``null``) is malformed. Control characters, ``?`` and ``#`` are rejected
+    before parsing: ``urlsplit`` silently strips tabs and newlines, and an
+    empty query or fragment (``https://host?``) would otherwise vanish.
     """
     if not value or value != value.strip():
+        return None
+    if any(ch in "?#" or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         return None
     try:
         parts = urlsplit(value)
@@ -83,7 +87,11 @@ def parse_origin(value: str) -> Origin | None:
         return None
     if parts.path or parts.query or parts.fragment:
         return None
-    return (scheme, parts.hostname.lower(), port or DEFAULT_PORTS[scheme])
+    if port is None:
+        port = DEFAULT_PORTS[scheme]
+    elif port == 0:
+        return None
+    return (scheme, parts.hostname.lower(), port)
 
 
 def request_origin(request: HTTPConnection, *, on_vercel: bool) -> Origin | None:
