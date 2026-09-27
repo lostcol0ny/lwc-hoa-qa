@@ -1,0 +1,171 @@
+{
+  "manifest": {
+    "build_time": "2026-09-27T00:00:00Z",
+    "source_hashes": {
+      "blog-2022-violations": "92f2a34ce516a0da1feb5818ff9d7bbe5be2f85c64a48c8bc213b0fffe5d2939",
+      "bylaws": "972650b57ab56dd19fc7676a80345bff316ab0d50a5f4ffb3341cc30cb6d0f88",
+      "declaration": "02b36f933131f088de526da12d486a5030c325c2850879e6a1618507a389258d",
+      "minutes-2022-12-29": "e8fbdc76ade3956cfa7038a0408109e1c8a068798f2ef9f4cee55bd241d83b27",
+      "rules-2016": "1603eb36d8730dbf2a9a2734c5fd112aeddfb97defd39329b6838ca09f9312a2",
+      "rules-2023": "a3bc7d230e16f9061e310087e44c750bf0ee4f1b8b32c551f203bf481bf4f94c",
+      "website-home": "e177951fdbe8a0217f10e9e1a7fefebc66a1f8bcb00248f860dbf52a8060d6ac"
+    },
+    "chunk_count": 8,
+    "ocr_fallbacks": []
+  },
+  "chunks": [
+    {
+      "id": "bylaws-3.4",
+      "doc_id": "bylaws",
+      "doc_title": "LWC Bylaws",
+      "source_url": "https://example.org/hoa/bylaws.pdf?ver=fixture-1",
+      "page_start": 2,
+      "page_end": 2,
+      "citation_label": "Bylaws, Art. 3, \u00a73.4, p. 2",
+      "heading_path": [
+        "Article 3",
+        "3.4"
+      ],
+      "text_clean": "The affairs of the Association shall be managed by its Board of Directors.",
+      "text_raw": "The affairs of the Association shall be managed by its Board of Directors.",
+      "authority": "governing",
+      "effective_date": "2001-08-09",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 26
+    },
+    {
+      "id": "rules-2023-2.1",
+      "doc_id": "rules-2023",
+      "doc_title": "Rules & Regulations 2023",
+      "source_url": "https://example.org/hoa/rules-2023.pdf?ver=fixture-1",
+      "page_start": 3,
+      "page_end": 3,
+      "citation_label": "Rules 2023, \u00a72.1, p. 3",
+      "heading_path": [
+        "2.1 Satellite dishes"
+      ],
+      "text_clean": "Satellite dishes may not exceed 39 inches in diameter.",
+      "text_raw": "Satellite dishes may not exceed 39 inches in diameter.",
+      "authority": "rules",
+      "effective_date": "2023-10-24",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 18
+    },
+    {
+      "id": "rules-2023-fines",
+      "doc_id": "rules-2023",
+      "doc_title": "Rules & Regulations 2023",
+      "source_url": "https://example.org/hoa/rules-2023.pdf?ver=fixture-1",
+      "page_start": 15,
+      "page_end": 15,
+      "citation_label": "Rules 2023, Fines, p. 15",
+      "heading_path": [
+        "Fines"
+      ],
+      "text_clean": "First violation: $75. Second violation: $125. Continuing violations: $75 per day.",
+      "text_raw": "First violation: $75. Second violation: $125. Continuing violations: $75 per day.",
+      "authority": "rules",
+      "effective_date": "2023-10-24",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 22
+    },
+    {
+      "id": "rules-2016-fines",
+      "doc_id": "rules-2016",
+      "doc_title": "Rules & Regulations 2016",
+      "source_url": "https://example.org/hoa/rules-2016.pdf?ver=fixture-1",
+      "page_start": 12,
+      "page_end": 12,
+      "citation_label": "Rules 2016, Fines, p. 12 (superseded)",
+      "heading_path": [
+        "Fines"
+      ],
+      "text_clean": "First violation: $50. Second violation: $100. Continuing violations: $50 per day.",
+      "text_raw": "First violation: $50. Second violation: $100. Continuing violations: $50 per day.",
+      "authority": "superseded",
+      "effective_date": "2016-06-07",
+      "published_date": null,
+      "superseded_by": "rules-2023",
+      "token_estimate": 22
+    },
+    {
+      "id": "minutes-2022-12-29-assessment",
+      "doc_id": "minutes-2022-12-29",
+      "doc_title": "Board Minutes December 29, 2022",
+      "source_url": "https://example.org/hoa/minutes-2022-12-29",
+      "page_start": null,
+      "page_end": null,
+      "citation_label": "Minutes, December 29, 2022, Assessment",
+      "heading_path": [
+        "Assessment"
+      ],
+      "text_clean": "Assessment $99 per quarter for 2023 ($396 per year). Motion approved.",
+      "text_raw": "Assessment $99 per quarter for 2023 ($396 per year). Motion approved.",
+      "authority": "board_decision",
+      "effective_date": "2022-12-29",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 32
+    },
+    {
+      "id": "website-2026-dues",
+      "doc_id": "website-home",
+      "doc_title": "Lakewood Creek HOA Home",
+      "source_url": "https://example.org/hoa/website-home",
+      "page_start": null,
+      "page_end": null,
+      "citation_label": "Website banner, 2026 dues",
+      "heading_path": [
+        "2026 dues"
+      ],
+      "text_clean": "2026 Assessment Prices: $452 year or $113 per quarter",
+      "text_raw": "2026 Assessment Prices: $452 year or $113 per quarter",
+      "authority": "website",
+      "effective_date": "2026-01-01",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 8
+    },
+    {
+      "id": "blog-2022-violations",
+      "doc_id": "blog-2022-violations",
+      "doc_title": "Tips for Responding to HOA Violations",
+      "source_url": "https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/tips-for-responding-to-hoa-violations",
+      "page_start": null,
+      "page_end": null,
+      "citation_label": "Tips for Responding to HOA Violations, October 20, 2022",
+      "heading_path": [
+        "Tips for Responding to HOA Violations"
+      ],
+      "text_clean": "2nd offense - $50.00 fine, 3rd offense - $100.00, 4th and subsequent offense - $50.00 per day",
+      "text_raw": "2nd offense - $50.00 fine, 3rd offense - $100.00, 4th and subsequent offense - $50.00 per day",
+      "authority": "informal",
+      "effective_date": "2022-10-20",
+      "published_date": "2022-10-20",
+      "superseded_by": null,
+      "token_estimate": 34
+    },
+    {
+      "id": "declaration-8-assessment",
+      "doc_id": "declaration",
+      "doc_title": "LWC Declaration of CC&Rs",
+      "source_url": "https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/3d427ceb-9051-40d3-b79d-cbabab98bc72/LWC-Declaration-of-CC.pdf?ver=1749305476488",
+      "page_start": 28,
+      "page_end": 28,
+      "citation_label": "Declaration, Art. 8, 2001, PDF p. 28 (printed p. 23)",
+      "heading_path": [
+        "Article 8"
+      ],
+      "text_clean": "beginning January 1, 2002, the annual assessment shall be not more than Three Hundred Twenty-Six and 00/100 ($326.00) per Unit",
+      "text_raw": "beginning January 1, 2002, the annual assessment shall be not more than Three Hundred Twenty-Six and 00/100 ($326.00) per Unit",
+      "authority": "governing",
+      "effective_date": "2001-08-09",
+      "published_date": null,
+      "superseded_by": null,
+      "token_estimate": 40
+    }
+  ]
+}
