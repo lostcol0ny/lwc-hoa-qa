@@ -1,7 +1,7 @@
 """Fixed text code adds to answers that cite Illinois law (addendum §6).
 
 The model never decides whether these lines appear. Any answer citing a
-statute gets ``STATUTE_DISCLAIMER``; one citing the Common Interest Community
+statute gets ``statute_disclaimer``; one citing the Common Interest Community
 Association Act also gets the applicability note, whose figures come from
 configured corpus chunks and whose arithmetic is done here. If a configured
 chunk is missing or no longer states its figure (the dues change, say), the
@@ -12,13 +12,42 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from hoa_qa.models import Chunk, Citation, citation_url
+from hoa_qa.models import Chunk, Citation, StatuteCompilation, citation_url
 from hoa_qa.verify.quotes import normalize
 
-STATUTE_DISCLAIMER = (
-    "This quotes Illinois law and is not legal advice. Whether a provision "
-    "applies to your situation can depend on the facts; consult an attorney "
-    "for advice."
+# Every statute disclaimer starts with this; the rest names ILGA's copy.
+STATUTE_DISCLAIMER_LEAD = "This quotes Illinois law"
+
+
+def statute_disclaimer(compiled: StatuteCompilation) -> str:
+    """The fixed disclaimer, stating how current ILGA's compiled text is.
+
+    The Public Act and month come from the corpus manifest, which the build
+    fills from the statutes/ snapshot, so a refresh updates them.
+    """
+    month = MONTHS[compiled.updated_on.month - 1]
+    return (
+        f"{STATUTE_DISCLAIMER_LEAD} as compiled by ILGA through Public Act "
+        f"{compiled.through_public_act} ({month} {compiled.updated_on.year}) and "
+        "is not legal advice. Whether a provision applies to your situation can "
+        "depend on the facts; consult an attorney for advice."
+    )
+
+
+# Not strftime("%B"): that follows the process locale.
+MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 )
 
 CICAA_DOC_ID = "cicaa"

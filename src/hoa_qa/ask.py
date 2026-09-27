@@ -39,10 +39,10 @@ from hoa_qa.answer.provider import (
     DraftClaim,
 )
 from hoa_qa.answer.statute_notes import (
-    STATUTE_DISCLAIMER,
     ApplicabilityNote,
     applicability_note,
     cites_cicaa,
+    statute_disclaimer,
 )
 from hoa_qa.models import (
     Answer,
@@ -393,6 +393,12 @@ class QAAsker:
         self._applicability: ApplicabilityNote | None = (
             applicability_note(corpus.chunks) if cites_cicaa(corpus.chunks) else None
         )
+        self._statute_disclaimer: str | None = None
+        if any(chunk.authority is Authority.statute for chunk in corpus.chunks):
+            compiled = corpus.manifest.statute_compilation
+            if compiled is None:
+                raise ValueError("corpus has statutes but no statute_compilation")
+            self._statute_disclaimer = statute_disclaimer(compiled)
 
     @property
     def max_cost_usd(self) -> float:
@@ -622,8 +628,10 @@ class QAAsker:
             parts.append(BOARD_REFERRAL)
         cited = [checked.chunk for v in kept for checked in v.citations]
         notes: list[Citation] = []
-        if any(chunk.authority is Authority.statute for chunk in cited):
-            parts.append(STATUTE_DISCLAIMER)
+        if self._statute_disclaimer is not None and any(
+            chunk.authority is Authority.statute for chunk in cited
+        ):
+            parts.append(self._statute_disclaimer)
             if self._applicability is not None and cites_cicaa(cited):
                 parts.append(self._applicability.text)
                 notes += self._applicability.citations

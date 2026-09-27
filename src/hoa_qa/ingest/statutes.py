@@ -19,7 +19,7 @@ import math
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -29,7 +29,7 @@ from pydantic import Field
 
 from hoa_qa.ingest.section import _suffix
 from hoa_qa.ingest.sources import ILGA_FTP_ILCS, Source
-from hoa_qa.models import Chunk, Model
+from hoa_qa.models import Chunk, Model, StatuteCompilation
 
 README_URL = f"{ILGA_FTP_ILCS}aReadMe/aReadMe.txt"
 SEQUENCE_URL = f"{ILGA_FTP_ILCS}aReadMe/Section%20Sequence.txt"
@@ -66,6 +66,18 @@ class Snapshot(Model):
     # Document names in ILGA's official order (Section Sequence.txt).
     sequence: tuple[str, ...]
     sha256: dict[str, str]
+
+
+def compilation(snapshots: Iterable[Snapshot]) -> StatuteCompilation | None:
+    """The least current ILGA copy among the snapshots (they normally agree)."""
+    found = [
+        StatuteCompilation(
+            through_public_act=s.through_public_act,
+            updated_on=datetime.strptime(s.ilga_updated_on, "%m/%d/%Y").date(),
+        )
+        for s in snapshots
+    ]
+    return min(found, key=lambda c: c.updated_on, default=None)
 
 
 def parse_listing(page: bytes, prefix: str) -> tuple[ListingEntry, ...]:

@@ -120,8 +120,10 @@ differs from the snapshot, the build **fails** with instructions to run
 uv run python -m hoa_qa.ingest refresh-statutes   # ~32 minutes
 ```
 
-and review and commit the result. The manifest's `source_hashes` entry for
-a statute is the SHA-256 of its `manifest.json`.
+and review and commit the result (README, Day-2 operations, "Annual statute
+refresh"). The manifest's `source_hashes` entry for a statute is the SHA-256
+of its `manifest.json`, and `statute_compilation` records ILGA's update date
+and last Public Act for the answer disclaimer.
 
 **Known gap of the annual copy.** On 2026-09-27 the live ILGA compilation
 had one section in force that the 2025 copy lacks: 805 ILCS 105/108.22

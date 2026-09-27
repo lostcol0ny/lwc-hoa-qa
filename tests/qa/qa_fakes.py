@@ -19,7 +19,7 @@ from hoa_qa.answer.provider import (
     ProviderResult,
 )
 from hoa_qa.ask import QAAsker, QASettings, build_asker
-from hoa_qa.models import Authority, Chunk, Corpus
+from hoa_qa.models import Authority, Chunk, Corpus, StatuteCompilation
 from hoa_qa.retrieval.jev import (
     NoulBatchResult,
     NoulQuestion,
@@ -181,6 +181,9 @@ HOMES = (
     "Declaration of CC&Rs."
 )
 DUES = "2026 Assessment Prices: $452 year or $113 per quarter"
+COMPILATION = StatuteCompilation(
+    through_public_act="104-433", updated_on=date(2025, 11, 21)
+)
 
 
 def with_statutes(corpus: Corpus) -> Corpus:
@@ -226,6 +229,10 @@ def with_statutes(corpus: Corpus) -> Corpus:
     )
     hashes = {**corpus.manifest.source_hashes, "cicaa": "0" * 64}
     manifest = corpus.manifest.model_copy(
-        update={"chunk_count": len(corpus.chunks) + len(extra), "source_hashes": hashes}
+        update={
+            "chunk_count": len(corpus.chunks) + len(extra),
+            "source_hashes": hashes,
+            "statute_compilation": COMPILATION,
+        }
     )
     return Corpus(manifest=manifest, chunks=(*corpus.chunks, *extra))

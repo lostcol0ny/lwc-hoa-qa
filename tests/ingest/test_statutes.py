@@ -3,6 +3,7 @@
 import hashlib
 import html
 import json
+import re
 import ssl
 from datetime import date
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from hoa_qa.answer.statute_notes import MONTHS, statute_disclaimer
 from hoa_qa.ingest import build
 from hoa_qa.ingest.fetch import Fetcher, tls_context
 from hoa_qa.ingest.sources import Source, load_sources
@@ -22,6 +24,7 @@ from hoa_qa.ingest.statutes import (
     Snapshot,
     _pack,
     check_current,
+    compilation,
     file_url,
     in_force,
     load_snapshot,
@@ -32,7 +35,7 @@ from hoa_qa.ingest.statutes import (
     statute_chunks,
     versions,
 )
-from hoa_qa.models import Authority, citation_url
+from hoa_qa.models import Authority, StatuteCompilation, citation_url, load_corpus
 
 ROOT = Path(__file__).parents[2]
 PREFIX = "076501600"
@@ -500,3 +503,73 @@ def test_a_list_lead_in_stays_with_its_first_item() -> None:
         [body, lead],
         ["(i) " + "y" * 30],
     ]
+
+
+def test_disclaimer_currency_follows_the_committed_manifests() -> None:
+    """refresh-statutes rewrites the manifests; the disclaimer follows them."""
+    snapshots = []
+    for source in load_sources(ROOT / "sources.yaml"):
+        if source.kind == "statute":
+            snapshots.append(load_snapshot(ROOT / "statutes", source)[0])
+    raw = [
+        json.loads((ROOT / "statutes" / s.doc_id / "manifest.json").read_text())
+        for s in snapshots
+    ]
+    compiled = compilation(snapshots)
+    assert compiled is not None
+    month, _, year = raw[0]["ilga_updated_on"].split("/")
+    expected = (
+        f"This quotes Illinois law as compiled by ILGA through Public Act "
+        f"{raw[0]['through_public_act']} ({MONTHS[int(month) - 1]} {year}) and is "
+        "not legal advice."
+    )
+    assert statute_disclaimer(compiled).startswith(expected)
+
+
+def test_build_records_the_least_current_compilation(tmp_path: Path) -> None:
+    documents = {f"{PREFIX}HArt. 1.html": ARTICLE, f"{PREFIX}K1-30.html": SEC_1_30}
+    snapshot = snapshot_files(tmp_path, documents)
+    older = snapshot.model_copy(
+        update={"ilga_updated_on": "11/20/2024", "through_public_act": "103-999"}
+    )
+    assert compilation([snapshot, older]) == StatuteCompilation(
+        through_public_act="103-999",
+        updated_on=date(2024, 11, 20),
+    )
+    assert compilation([]) is None
+
+
+def test_build_writes_the_compilation_to_the_corpus_manifest(tmp_path: Path) -> None:
+    documents = {f"{PREFIX}HArt. 1.html": ARTICLE, f"{PREFIX}K1-30.html": SEC_1_30}
+    snapshot_files(tmp_path / "statutes", documents)
+    source = statute_source()
+    other = tmp_path / "statutes/other-act"
+    (tmp_path / "statutes/cicaa").rename(other)
+    manifest = json.loads((other / "manifest.json").read_text())
+    (other / "manifest.json").write_text(
+        json.dumps({**manifest, "doc_id": "other-act"})
+    )
+    registry = tmp_path / "sources.yaml"
+    registry.write_text(
+        yaml.safe_dump(
+            [source.model_copy(update={"doc_id": "other-act"}).model_dump(mode="json")]
+        )
+    )
+    page = listing({n: len(d) for n, d in documents.items()})
+    corpus = build(
+        tmp_path / "out", registry, fetcher=lambda _: page, crawl_date=BUILD_DATE
+    )
+    assert corpus.manifest.statute_compilation == StatuteCompilation(
+        through_public_act="104-433",
+        updated_on=date(2025, 11, 21),
+    )
+    assert load_corpus(tmp_path / "out/corpus.json").manifest == corpus.manifest
+
+
+def test_bundled_intermediate_matches_its_recorded_fingerprint() -> None:
+    pem = (ROOT / "src/hoa_qa/ingest/certs/sectigo-ov-r40.pem").read_text("ascii")
+    recorded = re.search(r"^# SHA-256: ([0-9A-F:]{95})$", pem, re.MULTILINE)
+    assert recorded is not None
+    der = ssl.PEM_cert_to_DER_cert(pem[pem.index("-----BEGIN") :])
+    actual = hashlib.sha256(der).hexdigest().upper()
+    assert ":".join(actual[i : i + 2] for i in range(0, 64, 2)) == recorded[1]

@@ -17,12 +17,18 @@ from hoa_qa.answer.prompt import REJECTION_REASONS, SYSTEM_PROMPT, build_prompt
 from hoa_qa.answer.statute_notes import (
     DUES,
     HOMES,
-    STATUTE_DISCLAIMER,
+    STATUTE_DISCLAIMER_LEAD,
     applicability_note,
+    statute_disclaimer,
 )
 from hoa_qa.ask import QASettings, gives_advice
-from hoa_qa.models import Corpus, Outcome
+from hoa_qa.models import Corpus, Outcome, StatuteCompilation
 
+STATUTE_DISCLAIMER = (
+    "This quotes Illinois law as compiled by ILGA through Public Act 104-433 "
+    "(November 2025) and is not legal advice. Whether a provision applies to "
+    "your situation can depend on the facts; consult an attorney for advice."
+)
 APPLICABILITY = (
     "CICAA exempts associations with 10 or fewer units or annual budgeted "
     "assessments of $100,000 or less (765 ILCS 160/1-75). Lakewood Creek's "
@@ -191,3 +197,39 @@ def test_prompt_rules_for_statutes(statute_corpus: Corpus) -> None:
     rendered = build_prompt("q", [statute]).user
     assert 'authority="statute"' in rendered
     assert 'note="Illinois statute; state what it says, not how it applies"' in rendered
+
+
+def test_the_disclaimer_follows_the_corpus_manifest(
+    statute_corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    newer = StatuteCompilation(through_public_act="104-999", updated_on="2026-10-05")  # pyright: ignore[reportArgumentType]
+    assert statute_disclaimer(newer).startswith(
+        "This quotes Illinois law as compiled by ILGA through Public Act 104-999 "
+        "(October 2026) and is not legal advice."
+    )
+    corpus = statute_corpus.model_copy(
+        update={
+            "manifest": statute_corpus.manifest.model_copy(
+                update={"statute_compilation": newer}
+            )
+        }
+    )
+    answer = ask(
+        make_asker(corpus, settings, jev, FakeProvider([draft(STATUTE_CLAIM)]))
+    )
+    assert statute_disclaimer(newer) in answer.answer_text
+    assert answer.answer_text.count(STATUTE_DISCLAIMER_LEAD) == 1
+
+
+def test_a_statute_corpus_without_its_compilation_is_refused(
+    statute_corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    corpus = statute_corpus.model_copy(
+        update={
+            "manifest": statute_corpus.manifest.model_copy(
+                update={"statute_compilation": None}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="no statute_compilation"):
+        make_asker(corpus, settings, jev, FakeProvider([]))

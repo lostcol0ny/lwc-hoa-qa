@@ -15,7 +15,9 @@ from hoa_qa.ingest.section import citation, parts, sections
 from hoa_qa.ingest.sources import load_sources
 from hoa_qa.ingest.statutes import (
     MANIFEST,
+    Snapshot,
     check_current,
+    compilation,
     load_snapshot,
     snapshot_dir,
     statute_chunks,
@@ -58,11 +60,13 @@ def build(
     hashes: dict[str, str] = {}
     fallbacks: list[str] = []
     errors: list[str] = []
+    snapshots: list[Snapshot] = []
     for source in sources:
         if source.exclude:
             continue
         if source.kind == "statute":
             snapshot, documents = load_snapshot(statutes, source)
+            snapshots.append(snapshot)
             check_current(snapshot, source, listing)
             manifest_bytes = (snapshot_dir(statutes, source) / MANIFEST).read_bytes()
             hashes[source.doc_id] = hashlib.sha256(manifest_bytes).hexdigest()
@@ -132,6 +136,7 @@ def build(
             source_hashes=hashes,
             chunk_count=len(chunks),
             ocr_fallbacks=tuple(fallbacks),
+            statute_compilation=compilation(snapshots),
         ),
         chunks=tuple(chunks),
     )

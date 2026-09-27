@@ -115,10 +115,15 @@ sees that spend. A billed response that is malformed counts too:
 
 The model never decides whether these appear (`answer/statute_notes.py`):
 
-- Any answer whose **kept** claims cite a `statute` passage gets
-  `STATUTE_DISCLAIMER` appended: "This quotes Illinois law and is not legal
-  advice. Whether a provision applies to your situation can depend on the
-  facts; consult an attorney for advice."
+- Any answer whose **kept** claims cite a `statute` passage gets the statute
+  disclaimer appended, stating how current the text is: "This quotes Illinois
+  law as compiled by ILGA through Public Act 104-433 (November 2025) and is
+  not legal advice. Whether a provision applies to your situation can depend
+  on the facts; consult an attorney for advice." The Public Act and month are
+  not hard-coded: the corpus build copies them from the `statutes/` snapshot
+  manifests (ILGA's `aReadMe`) into `corpus_manifest.statute_compilation`,
+  so `refresh-statutes` updates them. `QAAsker` refuses a corpus that has
+  statute chunks but no compilation.
 - One citing CICAA (`doc_id` `cicaa`) also gets the **applicability note**:
   the §1-75 exemption thresholds, the home count and dues from configured
   chunks, and their product rounded to the nearest $1,000 ("735 homes and

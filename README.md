@@ -263,6 +263,28 @@ run **Build corpus** first. When chunk ids change, refresh
 `evals/corpus_ids.txt` (`hoa-qa eval --write-ids --corpus build/corpus.json`).
 The eval stops before any spend if a golden case cites an id that's gone.
 
+**Annual statute refresh.** ILGA regenerates its file repository's copy of
+the Illinois statutes about once a year (usually in the fall). When it does,
+the monthly **Build corpus** run fails with a snapshot mismatch ("ILGA has
+published files that differ from the statutes/ snapshot"). Deploys keep using
+the last good `corpus` artifact meanwhile, for up to its ~90-day retention,
+so there is time, but not unlimited time. To refresh:
+
+1. On a branch, run `uv run python -m hoa_qa.ingest refresh-statutes`. It
+   takes about 32 minutes at ILGA's 10-second crawl delay.
+2. Review the diff under `statutes/`: amended CICAA or NFP Act sections (the
+   `(Source: P.A. ...)` notes), new or removed sections, and future-effective
+   versions (the CICAA amendments effective 2027-01-01 among them) that the
+   build will now select once their date arrives. Check that the manifests'
+   `through_public_act` and `ilga_updated_on` moved forward; the statute
+   disclaimer quotes them.
+3. Build locally (`uv run python -m hoa_qa.ingest build --no-llm --out
+   build/`), check `section_warnings`, and refresh `evals/corpus_ids.txt`
+   (`hoa-qa eval --write-ids --corpus build/corpus.json`); update golden ids
+   if a statute section's parts changed.
+4. Commit via a PR, run the **Eval** workflow on the branch
+   (`corpus=build`), merge, then deploy as above.
+
 **If something goes wrong** (bad answers, a spend spike, abuse), take the bot
 offline, fastest first:
 
