@@ -339,15 +339,25 @@ One-time setup:
   Deploy re-run is needed. Failed/cancelled builds leave the deploy job visibly
   skipped. The `workflow_run` branch filter excludes manual builds on other
   branches (see [GitHub's branch-filter documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#limiting-your-workflow-to-run-based-on-branches)).
-- Production deploys share one concurrency group with cancellation disabled.
+- Push and eligible successful corpus deploys share one production concurrency
+  group with in-progress cancellation disabled. Only the newest pending
+  production deploy is kept; superseded pending runs show as cancelled. This
+  is harmless because each deploy uses current `main` and the newest successful
+  corpus available when it selects the artifact. Failed/cancelled builds and
+  ineligible events use unique noop groups, so they cannot displace a pending
+  production deploy. Corpus runs originating from PRs or other repositories
+  are also excluded.
   PR previews retain their per-ref group and cancel superseded previews.
   Production checks out current `main`, never the triggering build's SHA or
-  branch, so a queued build cannot roll production code back.
+  branch, so a queued build cannot roll production code back. Push deploys
+  also check out main's tip: the commit listed on a Deploy run can be older
+  than the code actually shipped.
 - With no Vercel secrets (including fork PRs, which never get secrets), the job
   writes a "Deploy skipped" summary and succeeds.
 - It downloads the `corpus` artifact (`corpus.json` + `corpus_manifest.json`)
-  from the **exact triggering run** for `workflow_run`; an older run is skipped
-  if a newer successful build on `main` exists. Push and PR deploys use the
+  from the **exact triggering run** for `workflow_run`, unless a newer
+  successful build on `main` exists, in which case it uses that newer artifact.
+  Push and PR deploys use the
   **latest successful `build-corpus.yml` run on `main`**. Selection fails with a
   clear message if there's no such run, the artifact expired, or a file is
   missing. It then validates the corpus with `load_corpus`.

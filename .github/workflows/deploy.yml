@@ -13,11 +13,11 @@ env:
   UV_LOCKED: "1"
   VERCEL_CLI_VERSION: "60.1.3"
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('deploy-pull_request-{0}', github.ref) || 'deploy-production' }}
+  group: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository)) && 'deploy-production' || github.event_name == 'pull_request' && format('deploy-pull_request-{0}', github.ref) || format('deploy-noop-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   deploy:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,7 +26,7 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      VERCEL_TARGET: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
+      VERCEL_TARGET: ${{ (github.event_name == 'push' || github.event_name == 'workflow_run') && 'production' || 'preview' }}
     steps:
       - name: Check Vercel secrets
         id: secrets
@@ -59,8 +59,8 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
             run_id="$TRIGGER_RUN_ID"
             if [ "$run_id" -lt "$latest_run_id" ]; then
-              echo "### Deploy skipped: corpus run $run_id is older than successful run $latest_run_id" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+              echo "### Corpus superseded: using newer successful run $latest_run_id instead of $run_id" >> "$GITHUB_STEP_SUMMARY"
+              run_id="$latest_run_id"
             fi
           fi
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"

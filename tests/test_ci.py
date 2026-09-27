@@ -103,21 +103,17 @@ def test_deploy_corpus_trigger_and_production_security() -> None:
         "types": ["completed"],
         "branches": ["main"],
     }
-    assert workflow["concurrency"] == {
-        "group": (
-            "${{ github.event_name == 'pull_request' && "
-            "format('deploy-pull_request-{0}', github.ref) || 'deploy-production' }}"
-        ),
-        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-    }
     job = workflow["jobs"]["deploy"]
     assert job["if"] == (
         "github.event_name != 'workflow_run' || "
-        "github.event.workflow_run.conclusion == 'success'"
+        "(github.event.workflow_run.conclusion == 'success' && "
+        "github.event.workflow_run.event != 'pull_request' && "
+        "github.event.workflow_run.head_repository.full_name == github.repository)"
     )
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     assert job["env"]["VERCEL_TARGET"] == (
-        "${{ github.event_name == 'pull_request' && 'preview' || 'production' }}"
+        "${{ (github.event_name == 'push' || github.event_name == 'workflow_run') "
+        "&& 'production' || 'preview' }}"
     )
     (checkout,) = [
         s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
@@ -144,7 +140,7 @@ def test_deploy_corpus_trigger_and_production_security() -> None:
     ("event", "trigger", "latest", "expected"),
     [
         ("workflow_run", "20", "20", "run_id=20\n"),
-        ("workflow_run", "19", "20", ""),
+        ("workflow_run", "19", "20", "run_id=20\n"),
         ("workflow_run", "21", "20", "run_id=21\n"),
         ("push", "", "20", "run_id=20\n"),
         ("pull_request", "", "20", "run_id=20\n"),
@@ -179,5 +175,27 @@ def test_deploy_corpus_selection(
         },
     )
     assert output.read_text() == expected
-    if not expected:
-        assert "Deploy skipped" in summary.read_text()
+    if event == "workflow_run" and int(trigger) < int(latest):
+        assert "Corpus superseded" in summary.read_text()
+
+
+def test_deploy_concurrency_allowlist_and_noop_isolation() -> None:
+    concurrency = load_workflow("deploy.yml")["concurrency"]
+    assert concurrency == {
+        "group": (
+            "${{ (github.event_name == 'push' || "
+            "(github.event_name == 'workflow_run' && "
+            "github.event.workflow_run.conclusion == 'success' && "
+            "github.event.workflow_run.event != 'pull_request' && "
+            "github.event.workflow_run.head_repository.full_name == "
+            "github.repository)) "
+            "&& 'deploy-production' || github.event_name == 'pull_request' && "
+            "format('deploy-pull_request-{0}', github.ref) || "
+            "format('deploy-noop-{0}', github.run_id) }}"
+        ),
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
+
+
+def test_statute_refresh_triggers_corpus_build() -> None:
+    assert "statutes/**" in load_workflow("build-corpus.yml")[True]["push"]["paths"]
