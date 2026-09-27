@@ -20,7 +20,7 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 | 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does the passage `passages.p3` (heading: …) help answer the question?"; a passage that answers part of it counts), batched **per `doc_id`, at most 8 passages per request**. Passages are keyed by name, not list position, and each question repeats its passage's heading: with positional references (`passages[30]`) in long lists the judge scored neighbors instead of the passage asked about. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` ("couldn't find it; contact the Board") with no free-form answer |
 | 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, quote}`. The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. | `not_found` if the model returns no claims |
 | 5a. Quote check | `verify/quotes.py` | Per citation: the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, curly quotes, ellipses (`…` = `...`) and dashes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
-| 5a′. Authority rule | `ask.py` | See [Source authority](#source-authority-support-is-not-authority). An `answer` claim may only rest on citations outside `informal`/`superseded` when a `governing`/`rules`/`board_decision` passage was provided. | |
+| 5a′. Authority rule | `ask.py` | See [Source authority](#source-authority-support-is-not-authority). An `answer` claim may only rest on citations outside `informal`/`superseded` when a `statute`/`governing`/`rules`/`board_decision` passage was provided. Statute-backed claims that give advice fail as `advice_phrasing`. | |
 | 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Each passage carries its `source` (citation label), `authority` and `effective_date` from the corpus next to its `text`, so attributions ("under the 2023 Rules") can be judged. Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
 | 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims, each with a code-written reason (quote not found, not fully supported, informal-only, informal-as-current), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. If a claim broke the authority rule, the retry also says so. Then apply the drop rule below. | `not_found` |
 | 6. Respond | `ask.py` | Compose the `Answer` from verified claims only (see below): `Citation.url = citation_url(chunk)`, the §5 disclaimer, and a uuid4 `request_id`. | `answered` |
@@ -70,9 +70,9 @@ superseded 2016 schedule. The support check passed, correctly: the blog does
 say $50. So the authority order is also enforced in code (`ask.py`,
 `AUTHORITATIVE` / `LOW_AUTHORITY`), not left to the prompt:
 
-- When any provided passage is `governing`, `rules`, or `board_decision`, an
-  `answer` claim is judged only on its citations that are not `informal` or
-  `superseded`. Low-authority citations are removed before the support check
+- When any provided passage is `statute`, `governing`, `rules`, or
+  `board_decision`, an `answer` claim is judged only on its citations that
+  are not `informal` or `superseded`. Low-authority citations are removed before the support check
   (a claim can't borrow support from the blog by also citing the Rules) and
   are not shown. A claim left with no citation fails as `low_authority`, and
   the retry explains the rule.
@@ -89,6 +89,11 @@ say $50. So the authority order is also enforced in code (`ask.py`,
   present", "today", "now", except negated or past uses ("no longer in
   effect", "not the current", "was in force") and "now" followed by an
   outdated word ("now superseded").
+- `statute` (Illinois law, ranked above `governing`) is authoritative too, so
+  an informal post can't answer next to a statute passage. When a statute
+  and an HOA document differ, the prompt has the model report both and add a
+  conflict claim citing both; it never says which one controls or that the
+  Association is breaking the law.
 - `website` (the Board-run site: the dues banner, the FAQ, About) and `form`
   are official HOA publications and are **not** low-authority. The dues
   banner is the only source for the current assessment, and the FAQ answers
@@ -105,6 +110,30 @@ sees that spend. A billed response that is malformed counts too:
   costs to the successful siblings' costs.
 - An Anthropic response whose structured output fails validation returns its
   usage with `draft=None`, which is counted before the retry.
+
+### Statutes: fixed text added by code (addendum §6)
+
+The model never decides whether these appear (`answer/statute_notes.py`):
+
+- Any answer whose **kept** claims cite a `statute` passage gets
+  `STATUTE_DISCLAIMER` appended: "This quotes Illinois law and is not legal
+  advice. Whether a provision applies to your situation can depend on the
+  facts; consult an attorney for advice."
+- One citing CICAA (`doc_id` `cicaa`) also gets the **applicability note**:
+  the §1-75 exemption thresholds, the home count and dues from configured
+  chunks, and their product rounded to the nearest $1,000 ("735 homes and
+  annual dues of $452, which suggests assessments of roughly $332,000, above
+  that threshold. Confirm with the Board or an attorney."). The note's three
+  sources (§1-75, `amendments-committee-intro`, `home-1`) are added to the
+  answer's citations. `QAAsker` computes it at start-up and refuses a corpus
+  whose evidence is missing or changed; the corpus build fails the same way.
+- Statute-backed claims (answer or conflict) that tell the reader their
+  rights ("you have the right", "you are entitled", "your rights"), what
+  applies "in your case/situation", or that someone "is violating/breaking"
+  the law fail as `advice_phrasing` before the support check, and the retry
+  says why. The prompt asks for "765 ILCS ... states that ..." phrasing and
+  forbids applicability conclusions. Statute claims otherwise go through the
+  same quote and support checks as every other claim.
 
 ## Eval diagnostics
 
@@ -176,14 +205,16 @@ dates. An unlisted `ANSWER_MODEL` is costed at the most expensive tier.
 | Component | Rate (2026-09-27) | Typical tokens | Typical cost |
 |---|---|---|---|
 | Jev gate | $0.042 / MTok input, output free | ~150 | ~$0.00001 |
-| Jev sweep (full corpus, ~74K tokens + per-question overhead) | same | ~90–110K | ~$0.004 |
+| Jev sweep (full corpus, ~150K estimated tokens + per-question overhead) | same | ~180–200K | ~$0.008 |
 | Jev support check | same | ~2–4K | ~$0.0001 |
 | `claude-haiku-4-5` answer | $1 / MTok in, $5 / MTok out | ~3–4K in, ~500 out | ~$0.006 |
-| **Answered question** | | | **~$0.01** (up to ~2× if it regenerates) |
+| **Answered question** | | | **~$0.02** (up to ~2× if it regenerates) |
 
-These are estimates. The integration unit had no API keys, so the first manual
-`eval.yml` run (its `total_cost_usd`) supplies measured numbers; the README
-has the real-corpus `max_cost_usd`.
+Measured on the golden eval of 2026-09-27 (27 cases, `--no-llm` corpus with
+the Illinois statutes): median answered question $0.0198, total $0.5175,
+latency p50 9.9 s / p95 17.2 s. Before the statutes (21 cases, 360 chunks):
+median $0.0115, latency p50 6.6 s / p95 16.0 s. The sweep and support
+estimates in the table are scaled from those runs.
 A gate refusal costs only the gate. Invalid input costs nothing.
 
 ### Worst-case bound: `max_cost_usd` (provable)
@@ -253,8 +284,8 @@ maximum-length question, at output caps of 1024, 2048 and 4096.
 |---|---|---|---|
 | `tests/fixtures/mini_corpus.json` (8 chunks) | $0.09794 | **$0.07746** | $0.06722 |
 | Synthetic ~74K-token corpus (240 chunks) | $0.13250 | **$0.11202** | $0.10178 |
-| Real corpus, HOA documents only (360 chunks) | $0.20837 | **$0.18789** | $0.17765 |
-| Real corpus with Illinois statutes (554 chunks) | $0.25038 | **$0.22990** | $0.21966 |
+| Real corpus, HOA documents only (360 chunks) | $0.20903 | **$0.18855** | $0.17831 |
+| Real corpus with Illinois statutes (668 chunks) | $0.26551 | **$0.24503** | $0.23479 |
 
 At 2048, the bound breaks down like this:
 
@@ -262,12 +293,12 @@ At 2048, the bound breaks down like this:
 |---|---|---|---|
 | Mini | $0.00339 (80,602 tokens) | $0.05360 (2 × 26,798 tokens) | $0.02048 |
 | Synthetic ~74K | $0.03544 (843,886 tokens) | $0.05610 (2 × 28,049 tokens) | $0.02048 |
-| Real with statutes | $0.10530 (2,507,138 tokens) | $0.10412 (2 × 52,060 tokens) | $0.02048 |
+| Real with statutes | $0.12182 (2,900,567 tokens) | $0.10272 (2 × 51,362 tokens) | $0.02048 |
 
 On the small corpora the largest term is the worst-case answer prompt, where
 the question and eight rejected statements are counted at 4 bytes per
-character. On the real corpus the sweep term (every one of the 554 planned
-passages as its own request) is as large. Neither is the output. Real-corpus
+character. On the real corpus the sweep term (every one of the 668 planned
+passages as its own request) is the largest. Neither is the output. Real-corpus
 figures were computed on 2026-09-27 from a `--no-llm` build.
 
 ## Logging and privacy

@@ -3,7 +3,10 @@
 A public web page with one text box. A neighbor asks a question about the
 Lakewood Creek HOA (rules, dues, the pool, architectural approvals,
 governance) and gets a short answer grounded **only** in the HOA's published
-documents, with citations that link to the exact source page. It's an
+documents and two Illinois statutes (the Common Interest Community
+Association Act and the General Not For Profit Corporation Act), with
+citations that link to the exact source page. Answers that quote Illinois
+law say so and are never legal advice about a resident's situation. It's an
 unofficial tool, not legal advice: the governing documents and the Board are
 authoritative.
 
@@ -13,6 +16,7 @@ claim in an answer must be backed by a verbatim quote that a second model
 confirms supports it.
 
 - Design spec: [docs/specs/2026-09-27-hoa-qa-design.md](docs/specs/2026-09-27-hoa-qa-design.md)
+  and the [Illinois statutes addendum](docs/specs/2026-09-27-statutes-addendum.md)
 - Corpus build: [docs/ingest.md](docs/ingest.md)
 - Question answering: [docs/qa-core.md](docs/qa-core.md)
 - Web app, budget and deployment: [docs/web-ops.md](docs/web-ops.md)
@@ -23,6 +27,7 @@ confirms supports it.
  CI (build-corpus.yml, monthly / manual)
    sources.yaml ─▶ fetch ─▶ extract (PyMuPDF) ─▶ OCR cleanup (off by default)
                ─▶ section ─▶ dedup ─▶ PII check ─▶ corpus.json + manifest
+   statutes/ (ILGA snapshot) ─▶ versions in force ─▶ sections ─▶ PII check ─┘
                                                         │  (artifact, never committed)
                                                         ▼
  Browser ─▶ Vercel CDN (public/: index.html, app.js)   deploy.yml bundles it
@@ -59,6 +64,15 @@ Build the corpus (network needed, no API key; OCR cleanup stays off):
 
 ```sh
 uv run python -m hoa_qa.ingest build --no-llm --out build/
+```
+
+Statute text comes from a committed snapshot of ILGA's file repository. When
+a build reports that ILGA published new files (about once a year), refresh
+and review it (about 32 minutes at ILGA's 10-second crawl delay; see
+[docs/ingest.md](docs/ingest.md#illinois-statutes)):
+
+```sh
+uv run python -m hoa_qa.ingest refresh-statutes
 ```
 
 Ask one question from the command line (needs both API keys):
@@ -129,14 +143,14 @@ summary when its secrets are missing.
 
 ## Cost model
 
-**Typical cost: about $0.01 per answered question** with the defaults
-(estimates from `docs/qa-core.md`, to be replaced with the first eval run's
-measured `total_cost_usd`):
+**Typical cost: about $0.02 per answered question** with the defaults
+(median measured cost of an answered golden question, eval of 2026-09-27;
+it was about $0.012 before the Illinois statutes were added):
 
 | Step | Typical cost |
 |---|---|
 | Jev gate | ~$0.00001 |
-| Jev sweep over the whole corpus (~90–110K tokens at $0.042/MTok) | ~$0.004 |
+| Jev sweep over the whole corpus (~150K estimated tokens, 668 chunks, at $0.042/MTok) | ~$0.008 |
 | Jev support check | ~$0.0001 |
 | `claude-haiku-4-5` answer (~3–4K in, ~500 out) | ~$0.006 |
 
@@ -150,23 +164,26 @@ month's budget, then reconciles to the actual cost afterwards. `max_cost_usd` is
 a provable worst case: it charges every Jev request as if the question were 500
 four-byte characters and every token a single byte, and both answer attempts at
 their largest prompt and the full `ANSWER_MAX_TOKENS` output. For the real
-corpus (554 chunks, 360 HOA and 194 Illinois statute) at the default settings
-it is **≈ $0.230**, so R ≈ $0.230. Adding the statutes raised it from ≈ $0.188:
-the sweep bound charges every planned passage, and the largest statute
-sections enlarge the worst-case answer prompt.
+corpus (668 chunks: 360 HOA and 308 Illinois statute) at the default
+settings it is **≈ $0.245**, so R ≈ $0.245. Adding the statutes raised it
+from ≈ $0.189: the sweep bound charges every planned passage as its own
+request.
 
 **How `MONTHLY_BUDGET_USD` and `ANSWER_MAX_TOKENS` interact.**
 
 - `ANSWER_MAX_TOKENS` raises R: each extra 1,024 tokens adds ≈ $0.010 with
-  Haiku (2 attempts × 1,024 × $5/MTok). R ≈ $0.220 at 1,024, $0.230 at 2,048,
-  $0.250 at 4,096.
+  Haiku (2 attempts × 1,024 × $5/MTok). R ≈ $0.235 at 1,024, $0.245 at 2,048,
+  $0.266 at 4,096.
 - The budget must be at least R, or **nothing** is admitted:
   `/api/health` then reports `"budget_config": "budget_below_reservation"` and
   a WARNING is logged.
 - At most `floor(MONTHLY_BUDGET_USD / R)` questions can be in flight at once,
   and the last R of the month goes unused (a question is refused while
   `spend + R > budget`). Spend is counted in exact integer micro-dollars.
-- Rough capacity: $5/month ≈ 480 typical answers; $20/month ≈ 2,000.
+- Rough capacity: $5/month ≈ 250 typical answers; $20/month ≈ 1,000.
+- Latency (same eval): p50 ≈ 9.9 s and p95 ≈ 17.2 s per question, up from
+  6.6 s and 16.0 s before the statutes, because the sweep scores ~300 more
+  passages.
 - Provider-side spend limits (step 4 below) are the backstop behind the app's
   cap.
 
