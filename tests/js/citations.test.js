@@ -1,4 +1,4 @@
-// Unit tests for the citation grouping in public/app.js (run: node --test tests/js/citations.test.js).
+// Unit tests for the citation grouping in public/app.js (run: node --test tests/js/*.test.js).
 "use strict";
 
 const test = require("node:test");

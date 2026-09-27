@@ -36,8 +36,22 @@ function groupCitations(citations) {
   return Array.from(groups.values());
 }
 
+// What an Enter keydown in the question box should do:
+// "submit", "newline" (let the browser insert it), "block" (swallow it) or
+// "ignore" (not ours; leave the event alone). IME composition always wins:
+// some browsers report isComposing === false with keyCode 229 mid-composition,
+// so both are checked, plus our own compositionstart/compositionend flag.
+function keyAction(event, state) {
+  if (!event || event.key !== "Enter") return "ignore";
+  const composing = Boolean(state && state.composing);
+  if (event.isComposing || event.keyCode === 229 || composing) return "ignore";
+  if (event.shiftKey) return "newline";
+  if (state && state.loading) return "block";
+  return "submit"; // plain Enter, and Ctrl/Cmd+Enter
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { groupCitations, normalizeQuote, isHttpsUrl };
+  module.exports = { groupCitations, normalizeQuote, isHttpsUrl, keyAction };
 }
 
 if (typeof document !== "undefined") {
@@ -53,6 +67,7 @@ if (typeof document !== "undefined") {
     const answerRegion = document.getElementById("answer");
     const documentsLink = document.getElementById("documents-link");
     let documentsUrl = DEFAULT_DOCUMENTS_URL;
+    let composing = false;
 
     const OUTCOMES = {
       answered: { status: "Answered", title: "Answer" },
@@ -220,12 +235,17 @@ if (typeof document !== "undefined") {
     }
 
     textarea.addEventListener("input", updateCounter);
+    textarea.addEventListener("compositionstart", function () {
+      composing = true;
+    });
+    textarea.addEventListener("compositionend", function () {
+      composing = false;
+    });
     textarea.addEventListener("keydown", function (event) {
-      // Enter submits; Shift+Enter adds a newline. Skip while an IME is composing.
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        if (!button.disabled) form.requestSubmit();
-      }
+      const action = keyAction(event, { loading: button.disabled, composing: composing });
+      if (action === "ignore" || action === "newline") return;
+      event.preventDefault();
+      if (action === "submit") form.requestSubmit();
     });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
