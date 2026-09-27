@@ -74,7 +74,8 @@ the same way:
 |---|---|---|
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | Monthly spend cap |
 | `BUDGET_RESERVE_PER_REQUEST_USD` | `0.05` | Minimum per-request reservation R (see below). Must be positive; an invalid value stops the app from starting |
-| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Shared counters for the budget and rate limiter |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Shared counters; each takes precedence over its `KV_*` fallback |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | Marketplace fallback URL and writable token; `KV_REST_API_READ_ONLY_TOKEN` is never used |
 | `RATE_LIMIT_PER_HOUR`, `RATE_LIMIT_PER_DAY` | `10`, `50` | App-level per-IP limits |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Document link for budget-exhausted answers and the page; the same variable the QA core uses for refusals. Must be `https://` |
 | `CORPUS_PATH` | `corpus.json` | Corpus location |
@@ -307,15 +308,21 @@ Checked against the live Vercel docs
 One-time setup:
 
 1. Create a Vercel project for this repo (`vercel link` locally, or the dashboard).
-   Turn **off** automatic Git deployments: `deploy.yml` deploys, so the corpus is
-   always bundled.
+   `vercel.json` sets [`git.deploymentEnabled: false`](https://vercel.com/docs/project-configuration/git-configuration#git.deploymentenabled)
+   to disable automatic Git deployments on all branches. The only deploy path is
+   `.github/workflows/deploy.yml`, which downloads and bundles the gitignored
+   `corpus.json`; a Git deployment would lack that artifact.
 2. **Upstash:** add Upstash Redis from the Vercel Marketplace (Storage →
    Upstash → Redis) and connect it to the project, or create a database at
-   upstash.com. The app reads `UPSTASH_REDIS_REST_URL` and
-   `UPSTASH_REDIS_REST_TOKEN`; if the integration injects the REST credentials
-   under other names (e.g. `KV_REST_API_URL`/`KV_REST_API_TOKEN`), add these two
-   with the same values. Use the read-write token. Scope them to Production (and
-   Preview, if you want shared counters there).
+   upstash.com. The [Marketplace integration](https://vercel.com/marketplace/upstash/upstash-kv)
+   injects `KV_REST_API_URL` and `KV_REST_API_TOKEN`, also documented in
+   [Upstash's integration example](https://upstash.com/docs/redis/tutorials/nextjs_with_redis).
+   The app first reads `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`,
+   falling back individually to the corresponding `KV_*` variable when unset
+   or blank. No manual mapping is needed. Both budget and rate limiting use
+   this resolution. `KV_REST_API_READ_ONLY_TOKEN` is never used: counters need
+   writes. Without a URL and writable token, production still fails closed.
+   Scope credentials to Production (and Preview for shared counters there).
 3. Project environment variables: `MONTHLY_BUDGET_USD`, `TYPESAFE_API_KEY`,
    `ANTHROPIC_API_KEY`, `ANSWER_MODEL`, and optionally `HOA_DOCUMENTS_URL` and
    the rate limits. Don't set `TYPESAFE_LOG_LEVEL`/`ANTHROPIC_LOG` to `debug`.
