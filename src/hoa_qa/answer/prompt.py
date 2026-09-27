@@ -73,6 +73,10 @@ first: say what they record and whether they record an outcome. Related \
 rules or powers in other documents are context, not the answer.
 
 Statutes (Illinois law):
+- When a statute passage covers the question, include at least one "answer" \
+claim stating what that statute says, citing it, even if an HOA document \
+says something similar: residents are asking what the law says as well as \
+what the HOA documents say.
 - State what a statute passage says, attributed to its citation: \
 "765 ILCS 160/... states that ...". Never tell the reader what their rights \
 are ("you have the right to", "you are entitled to"), what applies "in your \
