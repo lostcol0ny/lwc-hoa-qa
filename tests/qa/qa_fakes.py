@@ -67,7 +67,7 @@ class FakeJev:
             if name == "on_topic":
                 probabilities[name] = self.gate
             elif name.startswith("p"):
-                text = state["passages"][int(name[1:])]["text"]
+                text = state["passages"][name]["text"]
                 probabilities[name] = self.relevance.get(self.text_to_id[text], 0.0)
             else:
                 claim = state["claims"][int(name[1:])]
