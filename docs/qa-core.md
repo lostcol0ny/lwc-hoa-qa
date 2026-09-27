@@ -42,6 +42,14 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
     first draft could under this rule, the first draft is used, with its
     failed claims dropped. Its surviving claims were verified the same way.
 
+  Any failed claim triggers the retry, even when the first draft could
+  already stand with it dropped. That is deliberate for now (the retry
+  often repairs side claims), but it costs a second answer call and adds
+  variance: in eval run 5 a first draft stating "$452 per year" failed only
+  a non-essential claim, and the retry rephrased the dues as "$113 per
+  quarter". Possible cost/variance optimization: when only non-essential
+  claims fail, drop them without retrying.
+
   A failed `conflict` claim never blocks the answer, even if marked essential:
   the verified answer is correct without the note. The `essential` flag can
   only make the outcome stricter. Unverified text is never shown whatever the
