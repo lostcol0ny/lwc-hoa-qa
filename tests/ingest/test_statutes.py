@@ -14,11 +14,11 @@ from pydantic import ValidationError
 
 from hoa_qa.ingest import build
 from hoa_qa.ingest.fetch import Fetcher, tls_context
-from hoa_qa.ingest.section import MAX_CHARS
 from hoa_qa.ingest.sources import Source, load_sources
 from hoa_qa.ingest.statutes import (
     README_URL,
     SEQUENCE_URL,
+    STATUTE_MAX_CHARS,
     Snapshot,
     _pack,
     check_current,
@@ -286,16 +286,15 @@ def test_chunks_carry_citation_url_and_continuation_context(tmp_path: Path) -> N
     snapshot = snapshot_files(tmp_path, documents)
     warnings: list[str] = []
     chunks = statute_chunks(statute_source(), snapshot, documents, BUILD_DATE, warnings)
-    assert [c.id for c in chunks] == [
-        "cicaa-1-25-a",
-        "cicaa-1-25-b",
-        "cicaa-1-25-c",
-        "cicaa-1-30",
-    ]
+    ids = [c.id for c in chunks]
+    # The long section splits into lettered parts; 1-73 is left out.
+    assert ids[-1] == "cicaa-1-30"
+    assert ids[:-1] == [f"cicaa-1-25-{chr(97 + i)}" for i in range(len(ids) - 1)]
+    assert len(ids) >= 4
     assert warnings == [
         "765 ILCS 160/1-73: only future-effective text (2027-01-01); not ingested"
     ]
-    first, second, _, records = chunks
+    first, second, records = chunks[0], chunks[1], chunks[-1]
     assert first.citation_label == "765 ILCS 160/1-25 (Board of managers)"
     assert first.text_clean.startswith(
         "Common Interest Community Association Act (765 ILCS 160), Article 1: "
@@ -310,7 +309,7 @@ def test_chunks_carry_citation_url_and_continuation_context(tmp_path: Path) -> N
         "effective 2015-07-14. "
         "(continued)\n"
     )
-    assert all(len(c.text_clean) <= MAX_CHARS for c in chunks)
+    assert all(len(c.text_clean) <= STATUTE_MAX_CHARS for c in chunks)
     assert records.effective_date == date(2024, 1, 1)
     assert "4 times" in records.text_clean and "6 times" not in records.text_clean
     assert records.authority is Authority.statute
@@ -443,7 +442,7 @@ def test_committed_snapshot_is_current_law() -> None:
         assert all(
             c.effective_date is None or c.effective_date <= BUILD_DATE for c in chunks
         )
-        assert all(len(c.text_clean) <= MAX_CHARS for c in chunks)
+        assert all(len(c.text_clean) <= STATUTE_MAX_CHARS for c in chunks)
 
 
 def test_crawl_delay_spaces_requests_per_host(tmp_path: Path) -> None:

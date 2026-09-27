@@ -254,7 +254,7 @@ cases:
   - id: statute-records-inspection
     question: Can I inspect the Association's financial records?
     expect_outcome: answered
-    expect_chunk_ids_any: [cicaa-1-30-a, cicaa-1-30-b, nfp-act-107.75]
+    expect_chunk_ids_any: [cicaa-1-30-c, cicaa-1-30-d, nfp-act-107.75-a, nfp-act-107.75-b]
     must_include: ["This quotes Illinois law"]
     must_not_include: ["violat", "breaking the law", "you have the right", "you are entitled"]
     notes: >-
@@ -282,7 +282,7 @@ cases:
   - id: statute-director-removal
     question: How can a director be removed from the Board?
     expect_outcome: answered
-    expect_chunk_ids_any: [nfp-act-108.35]
+    expect_chunk_ids_any: [nfp-act-108.35-a, nfp-act-108.35-b]
     must_include: ["This quotes Illinois law"]
     must_not_include: ["you have the right", "you are entitled", "in your case", "you should"]
     notes: >-

@@ -27,7 +27,7 @@ from bs4 import BeautifulSoup
 from bs4.element import NavigableString, Tag
 from pydantic import Field
 
-from hoa_qa.ingest.section import MAX_CHARS, _suffix
+from hoa_qa.ingest.section import _suffix
 from hoa_qa.ingest.sources import ILGA_FTP_ILCS, Source
 from hoa_qa.models import Chunk, Model
 
@@ -206,6 +206,11 @@ _SECTION = re.compile(r"^Sec\. ([0-9A-Za-z.-]+)\.\s*(.*)$")
 _SOURCE = re.compile(r"\s*\(Source: (P\.A\. [^()]*?)\s*\.?\s*\)\s*$")
 _PUBLIC_ACT = re.compile(r"(\d{2,3})-(\d+)(?:,\s*eff\.\s*(\d{1,2})-(\d{1,2})-(\d{2}))?")
 # A list item run onto the previous one: "...; (ii) the ...", "...: (1) ...".
+# Statute parts are half the size of other chunks (~400 tokens): a long
+# section is a dense run of numbered provisions, and the support check judges
+# a claim against its whole cited part (eval run 4: a correct claim citing a
+# ~2,900-character list of records scored 0.25).
+STATUTE_MAX_CHARS = 1600
 _ITEM = re.compile(r"(?<=[.;:])\s+(?=\((?:[a-z]{1,4}|\d{1,3})\)\s)")
 _ARTICLE = re.compile(r"^\(\d+ ILCS \d+/Art\. ([^ )]+) heading\)\s*(.*?)\s*(?:\(|$)")
 _KINDS = {
@@ -489,7 +494,7 @@ def _parts(
     )
     opening = [f"({source.ilcs.citation}/{version.section})"]
     opening.append(f"Sec. {version.section}. {version.caption}")
-    groups = _pack([*opening, *version.lines], MAX_CHARS - len(context) - 20)
+    groups = _pack([*opening, *version.lines], STATUTE_MAX_CHARS - len(context) - 20)
     heading = (act, article, f"Sec. {version.section}. {version.caption}")
     return [
         Part(
