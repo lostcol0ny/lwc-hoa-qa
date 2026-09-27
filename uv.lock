@@ -158,45 +158,53 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "beautifulsoup4" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic" },
-    { name = "pymupdf" },
-    { name = "pyyaml" },
     { name = "typesafe-sdk" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "beautifulsoup4" },
     { name = "pre-commit" },
+    { name = "pymupdf" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pyyaml" },
     { name = "ruff" },
 ]
+ingest = [
+    { name = "beautifulsoup4" },
+    { name = "pymupdf" },
+    { name = "pyyaml" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=1.8,<2" },
-    { name = "beautifulsoup4", specifier = ">=4.15.0" },
     { name = "fastapi", specifier = ">=0.141.1,<1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "pydantic", specifier = ">=2,<3" },
-    { name = "pymupdf", specifier = ">=1.28.2" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "typesafe-sdk", specifier = ">=0.7.2,<0.8" },
     { name = "uvicorn", specifier = ">=0.54.0,<1" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "beautifulsoup4", specifier = ">=4.15.0,<5" },
     { name = "pre-commit" },
+    { name = "pymupdf", specifier = ">=1.28.2,<2" },
     { name = "pyright" },
     { name = "pytest" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "ruff" },
+]
+ingest = [
+    { name = "beautifulsoup4", specifier = ">=4.15.0,<5" },
+    { name = "pymupdf", specifier = ">=1.28.2,<2" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7" },
 ]
 
 [[package]]

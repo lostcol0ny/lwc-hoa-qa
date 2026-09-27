@@ -1,6 +1,10 @@
 name: Build corpus
 on:
   workflow_dispatch:
+  # Monthly: refreshes website pages (dated by this crawl) and keeps a fresh
+  # `corpus` artifact inside its 90-day retention for the deploy workflow.
+  schedule:
+    - cron: '17 6 1 * *'
   push:
     branches: [main]
     paths:
@@ -23,7 +27,7 @@ jobs:
         with:
           python-version: '3.12'
           enable-cache: true
-      - run: uv sync --locked
+      - run: uv sync --locked --group ingest
       - name: Build and validate corpus
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
