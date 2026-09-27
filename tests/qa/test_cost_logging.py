@@ -138,7 +138,7 @@ def test_price_lookup() -> None:
 
 INVENTED = claim(
     "Seniors are exempt from fines.",
-    ("rules-2023-fines", "First violation: $75."),
+    ("rules-2023-fines", "2nd violation: $75."),
     essential=False,
 )
 LONG_QUESTION = "What are the fines " + "and the rules " * 34  # ~500 chars
@@ -161,7 +161,7 @@ def _setup_regenerate_not_found(jev: FakeJev) -> list:
 def _setup_everything_relevant(jev: FakeJev) -> list:
     jev.relevance = {cid: 0.9 for cid in jev.text_to_id.values()}
     many = [
-        claim(f"{i}: second violation $125.", ("rules-2023-fines", "$125"))
+        claim(f"{i}: third violation $125.", ("rules-2023-fines", "$125"))
         for i in range(8)
     ]
     return [draft(*many[:7], INVENTED), draft(*many)]

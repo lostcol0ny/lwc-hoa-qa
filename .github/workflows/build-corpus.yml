@@ -1,6 +1,11 @@
 name: Build corpus
 on:
   workflow_dispatch:
+    inputs:
+      llm_cleanup:
+        description: Repair OCR with the Anthropic API (guarded; needs ANTHROPIC_API_KEY)
+        type: boolean
+        default: false
   # Monthly: refreshes website pages (dated by this crawl) and keeps a fresh
   # `corpus` artifact inside its 90-day retention for the deploy workflow.
   schedule:
@@ -28,14 +33,23 @@ jobs:
           python-version: '3.12'
           enable-cache: true
       - run: uv sync --locked --group ingest
+      # LLM OCR cleanup is OFF unless a manual run sets llm_cleanup: true.
+      # Scheduled and push builds never send documents to the API, and the
+      # key is only exposed to this step when cleanup was requested.
       - name: Build and validate corpus
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_CLEANUP: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_cleanup && 'true' || 'false' }}
+          ANTHROPIC_API_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_cleanup && secrets.ANTHROPIC_API_KEY || '' }}
           INGEST_CLEANUP_MODEL: claude-haiku-4-5-20251001
         run: |
-          if [ -n "$ANTHROPIC_API_KEY" ]; then
+          if [ "$LLM_CLEANUP" = true ] && [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "OCR cleanup: LLM (guarded)" >> "$GITHUB_STEP_SUMMARY"
             uv run python -m hoa_qa.ingest build --out build/
           else
+            if [ "$LLM_CLEANUP" = true ]; then
+              echo "::warning::llm_cleanup requested but ANTHROPIC_API_KEY is not set; building with --no-llm"
+            fi
+            echo "OCR cleanup: off (--no-llm)" >> "$GITHUB_STEP_SUMMARY"
             uv run python -m hoa_qa.ingest build --out build/ --no-llm
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

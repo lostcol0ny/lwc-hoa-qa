@@ -145,8 +145,8 @@ def draft(*claims: DraftClaim, refer_to_board: bool = False) -> AnswerDraft:
 
 
 FINE_CLAIM = claim(
-    "A second violation is a $125 fine under the 2023 Rules.",
-    ("rules-2023-fines", "Second violation: $125."),
+    "A third violation is a $125 fine under the 2023 Rules.",
+    ("rules-2023-fines", "3rd violation: $125."),
 )
 FINES_DRAFT = draft(FINE_CLAIM)
 

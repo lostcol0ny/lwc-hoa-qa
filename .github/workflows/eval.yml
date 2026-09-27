@@ -1,0 +1,104 @@
+name: Eval
+# Manual golden eval against the real APIs (spec §7). Costs a few cents per
+# run; see README "Cost model". Never runs on push or pull_request.
+on:
+  workflow_dispatch:
+    inputs:
+      corpus:
+        description: Use the latest 'corpus' artifact from build-corpus.yml, or build one now (--no-llm)
+        type: choice
+        options: [artifact, build]
+        default: artifact
+      min_pass:
+        description: Fail the run below this pass rate (0-1)
+        type: string
+        default: '0.85'
+permissions:
+  contents: read
+env:
+  UV_LOCKED: "1"
+concurrency:
+  group: eval
+  cancel-in-progress: false
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # download the corpus artifact from build-corpus.yml
+    steps:
+      - name: Check API secrets
+        id: secrets
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$TYPESAFE_API_KEY" ] || [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Eval skipped"
+              echo "TYPESAFE_API_KEY or ANTHROPIC_API_KEY is not set."
+              echo "Add both repository secrets (README, launch checklist step 1), then re-run."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.secrets.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        if: steps.secrets.outputs.enabled == 'true'
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      # The default groups include `ingest` (PyYAML for golden.yaml, PyMuPDF
+      # for building the corpus).
+      - run: uv sync --locked
+        if: steps.secrets.outputs.enabled == 'true'
+      - name: Download latest corpus artifact
+        if: steps.secrets.outputs.enabled == 'true' && inputs.corpus == 'artifact'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-corpus.yml \
+            --branch main --status success --limit 1 --json databaseId \
+            --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::No successful build-corpus.yml run on main. Run 'Build corpus' first, or re-run this with corpus=build."
+            exit 1
+          fi
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name corpus --dir build
+          test -f build/corpus.json
+          echo "Corpus: build-corpus run $run_id" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build corpus (no LLM cleanup)
+        if: steps.secrets.outputs.enabled == 'true' && inputs.corpus == 'build'
+        run: |
+          uv run python -m hoa_qa.ingest build --out build/ --no-llm
+          echo "Corpus: built in this run (--no-llm)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Run golden eval
+        if: steps.secrets.outputs.enabled == 'true'
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MIN_PASS: ${{ inputs.min_pass }}
+        run: |
+          set -o pipefail
+          uv run hoa-qa eval evals/golden.yaml --corpus build/corpus.json \
+            --json eval-results.json --min-pass "$MIN_PASS" | tee eval-table.txt
+      - name: Summarize
+        if: always() && steps.secrets.outputs.enabled == 'true'
+        run: |
+          if [ -f eval-table.txt ]; then
+            { echo '### Golden eval'; echo '```'; cat eval-table.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.secrets.outputs.enabled == 'true'
+        with:
+          name: eval-results
+          path: |
+            eval-results.json
+            eval-table.txt
+          if-no-files-found: warn
+          retention-days: 30

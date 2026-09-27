@@ -4,10 +4,12 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lupa import LuaError, LuaRuntime
 
 from hoa_qa.budget import (
     RESERVE_SCRIPT,
@@ -112,7 +114,11 @@ UPSTASH_ENV = {
 
 
 class FakeUpstash:
-    """A tiny Redis emulation behind the Upstash REST wire format."""
+    """A tiny Redis emulation behind the Upstash REST wire format.
+
+    ``EVAL`` runs the real Lua script under ``lupa``, with ``redis.call`` bound
+    to this emulation, so tests exercise ``RESERVE_SCRIPT`` itself.
+    """
 
     def __init__(self) -> None:
         self.data: dict[str, str] = {}
@@ -122,29 +128,40 @@ class FakeUpstash:
 
     def run(self, command: list) -> object:
         if command[0] == "EVAL":
-            return self.eval_reserve(command)
+            return self.eval(command)
         name, key, *args = command
         if name == "GET":
             return self.data.get(key)
-        if name == "INCRBYFLOAT":
-            value = float(self.data.get(key, "0")) + float(args[0])
-            self.data[key] = repr(value)
-            return self.data[key]
+        if name == "INCRBY":
+            current = self.data.get(key, "0")
+            if not _is_redis_integer(current) or not _is_redis_integer(args[0]):
+                raise RedisError("ERR value is not an integer or out of range")
+            value = int(current) + int(args[0])
+            self.data[key] = str(value)
+            return value
         if name == "EXPIRE":
             self.ttls[key] = int(args[0])
             return 1
         raise AssertionError(f"unexpected command {name}")
 
-    def eval_reserve(self, command: list) -> object:
-        """Python stand-in for RESERVE_SCRIPT (checked against it by payload)."""
-        _, script, numkeys, key, amount, limit, ttl, epsilon = command
-        assert script == RESERVE_SCRIPT and numkeys == 1
-        current = float(self.data.get(key, "0"))
-        if current + float(amount) > float(limit) + float(epsilon):
-            return [0, repr(current)]
-        total = self.run(["INCRBYFLOAT", key, amount])
-        self.run(["EXPIRE", key, ttl])
-        return [1, total]
+    def eval(self, command: list) -> object:
+        _, script, numkeys, *rest = command
+        assert script == RESERVE_SCRIPT
+        keys, argv = rest[:numkeys], rest[numkeys:]
+        lua = LuaRuntime(unpack_returned_tuples=False)
+
+        def call(name: str, *args: object) -> object:
+            result = self.run([name, *args])
+            return False if result is None else result  # nil bulk -> false
+
+        lua_globals = lua.globals()
+        lua_globals["KEYS"] = lua.table(*keys)
+        # Redis passes every ARGV entry to the script as a string.
+        lua_globals["ARGV"] = lua.table(*(str(arg) for arg in argv))
+        lua_globals["redis"] = lua.table_from({"call": call})
+        returned = cast(Any, lua.execute(script))
+        # Redis converts a Lua table to an array and numbers to integers.
+        return [int(value) for value in returned.values()]
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -154,9 +171,25 @@ class FakeUpstash:
         is_write = request.url.path == "/multi-exec" or body[0] == "EVAL"
         if self.fail_writes and is_write:
             return httpx.Response(500, json={"error": "ERR write failed"})
-        if request.url.path == "/multi-exec":
-            return httpx.Response(200, json=[{"result": self.run(c)} for c in body])
-        return httpx.Response(200, json={"result": self.run(body)})
+        try:
+            if request.url.path == "/multi-exec":
+                return httpx.Response(200, json=[{"result": self.run(c)} for c in body])
+            return httpx.Response(200, json={"result": self.run(body)})
+        except (RedisError, LuaError) as exc:
+            return httpx.Response(400, json={"error": str(exc)})
+
+    def handler_status(self, command: list) -> int:
+        request = httpx.Request("POST", "https://example-upstash.io/", json=command)
+        return self.handler(request).status_code
+
+
+class RedisError(Exception):
+    pass
+
+
+def _is_redis_integer(value: object) -> bool:
+    text = str(value)
+    return text.lstrip("-").isdigit()
 
 
 def upstash_store(fake: FakeUpstash, clock: FixedClock) -> UpstashBudgetStore:

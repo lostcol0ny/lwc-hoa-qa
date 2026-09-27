@@ -68,7 +68,7 @@ def test_anthropic_adapter_uses_json_schema_output() -> None:
     output = {
         "claims": [
             {
-                "statement": "A second violation is $125.",
+                "statement": "A third violation is $125.",
                 "kind": "answer",
                 "essential": True,
                 "citations": [{"chunk_id": "rules-2023-fines", "quote": "$125"}],
@@ -201,7 +201,7 @@ def test_billed_invalid_answer_output_cost_survives_to_error_outcome(
         max_retries=0,
     )
     asker = build_asker(corpus, settings, jev=jev, provider=provider)
-    result = asyncio.run(asker("What is the fine for a second violation?"))
+    result = asyncio.run(asker("What is the fine for a third violation?"))
     assert calls == 2
     assert result.answer.outcome is Outcome.error
     assert result.answer_input_tokens == 3_000

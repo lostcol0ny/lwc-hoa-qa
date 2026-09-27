@@ -2,12 +2,12 @@
   "manifest": {
     "build_time": "2026-09-27T00:00:00Z",
     "source_hashes": {
-      "blog-2022-violations": "92f2a34ce516a0da1feb5818ff9d7bbe5be2f85c64a48c8bc213b0fffe5d2939",
+      "blog-2022-violations": "0128db1df6f04e613d1bcdb55c40aa32547d380015cf1df5a36c299ed514d6fc",
       "bylaws": "972650b57ab56dd19fc7676a80345bff316ab0d50a5f4ffb3341cc30cb6d0f88",
       "declaration": "02b36f933131f088de526da12d486a5030c325c2850879e6a1618507a389258d",
       "minutes-2022-12-29": "e8fbdc76ade3956cfa7038a0408109e1c8a068798f2ef9f4cee55bd241d83b27",
-      "rules-2016": "1603eb36d8730dbf2a9a2734c5fd112aeddfb97defd39329b6838ca09f9312a2",
-      "rules-2023": "a3bc7d230e16f9061e310087e44c750bf0ee4f1b8b32c551f203bf481bf4f94c",
+      "rules-2016": "215dcc8e44f1babf6300f5b35fdd6b179139cd3358070535af00935dfae173d2",
+      "rules-2023": "dd08c16bfb297f7d97fc1fd038e48fc37494bb2d54ed8621e006d978bbd13ef3",
       "website-home": "e177951fdbe8a0217f10e9e1a7fefebc66a1f8bcb00248f860dbf52a8060d6ac"
     },
     "chunk_count": 8,
@@ -64,13 +64,13 @@
       "heading_path": [
         "Fines"
       ],
-      "text_clean": "First violation: $75. Second violation: $125. Continuing violations: $75 per day.",
-      "text_raw": "First violation: $75. Second violation: $125. Continuing violations: $75 per day.",
+      "text_clean": "Fining schedule: 1st violation: courtesy letter. 2nd violation: $75. 3rd violation: $125. 4th and subsequent violations: $75 per day.",
+      "text_raw": "Fining schedule: 1st violation: courtesy letter. 2nd violation: $75. 3rd violation: $125. 4th and subsequent violations: $75 per day.",
       "authority": "rules",
       "effective_date": "2023-10-24",
       "published_date": null,
       "superseded_by": null,
-      "token_estimate": 22
+      "token_estimate": 34
     },
     {
       "id": "rules-2016-fines",
@@ -83,13 +83,13 @@
       "heading_path": [
         "Fines"
       ],
-      "text_clean": "First violation: $50. Second violation: $100. Continuing violations: $50 per day.",
-      "text_raw": "First violation: $50. Second violation: $100. Continuing violations: $50 per day.",
+      "text_clean": "Fining schedule: 1st offense: written warning. 2nd offense: $50. 3rd offense: $100. 4th and subsequent offenses: $50 per day.",
+      "text_raw": "Fining schedule: 1st offense: written warning. 2nd offense: $50. 3rd offense: $100. 4th and subsequent offenses: $50 per day.",
       "authority": "superseded",
       "effective_date": "2016-06-07",
       "published_date": null,
       "superseded_by": "rules-2023",
-      "token_estimate": 22
+      "token_estimate": 32
     },
     {
       "id": "minutes-2022-12-29-assessment",
@@ -140,13 +140,13 @@
       "heading_path": [
         "Tips for Responding to HOA Violations"
       ],
-      "text_clean": "2nd offense - $50.00 fine, 3rd offense - $100.00, 4th and subsequent offense - $50.00 per day",
-      "text_raw": "2nd offense - $50.00 fine, 3rd offense - $100.00, 4th and subsequent offense - $50.00 per day",
+      "text_clean": "1st offense - Written warning 2nd offense - $50.00 fine 3rd offense - $100.00 4th and subsequent offense - $50.00 per day",
+      "text_raw": "1st offense - Written warning 2nd offense - $50.00 fine 3rd offense - $100.00 4th and subsequent offense - $50.00 per day",
       "authority": "informal",
       "effective_date": "2022-10-20",
       "published_date": "2022-10-20",
       "superseded_by": null,
-      "token_estimate": 34
+      "token_estimate": 31
     },
     {
       "id": "declaration-8-assessment",

@@ -7,7 +7,7 @@ bound for one call that the web budget reserves up front. The CLI calls the
 same pipeline:
 
 ```sh
-uv run hoa-qa ask "How much is the fine for a second violation?" --corpus corpus.json
+uv run hoa-qa ask "How much is the fine for a third violation?" --corpus corpus.json
 uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 ```
 
@@ -114,7 +114,9 @@ dates. An unlisted `ANSWER_MODEL` is costed at the most expensive tier.
 | `claude-haiku-4-5` answer | $1 / MTok in, $5 / MTok out | ~3–4K in, ~500 out | ~$0.006 |
 | **Answered question** | | | **~$0.01** (up to ~2× if it regenerates) |
 
-These are estimates. Integration (unit 5) replaces them with measured numbers.
+These are estimates. The integration unit had no API keys, so the first manual
+`eval.yml` run (its `total_cost_usd`) supplies measured numbers; the README
+has the real-corpus `max_cost_usd`.
 A gate refusal costs only the gate. Invalid input costs nothing.
 
 ### Worst-case bound: `max_cost_usd` (provable)
@@ -216,6 +218,8 @@ asserts that every request it receives is within both limits. The real SDK
 adapters are covered offline through `httpx2.MockTransport`.
 
 `tests/qa/test_live.py` (`@pytest.mark.live`) runs only when both API keys are
-set. It asks about a **second violation** (expects the 2023 Rules' $125) and a
-**continuing violation** (expects $75 per day). The 2023 tiers are First
-($75), Second ($125), and Continuing ($75 per day).
+set. It asks about a **third violation** (expects the 2023 Rules' $125, never
+the 2016/blog $100) and a **4th and subsequent (continuing) violation**
+(expects $75 per day, never $50). The 2023 Rules' tiers are: 1st, a courtesy
+letter; 2nd, $75; 3rd, $125; 4th and subsequent, $75 per day. The superseded
+2016 rules and the 2022 blog post say: written warning, $50, $100, $50 per day.

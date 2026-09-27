@@ -22,7 +22,7 @@ def test_ask_prints_answer_citation_and_disclaimer(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code = main(
-        ["ask", "What is a second fine?", "--corpus", str(FIXTURE)],
+        ["ask", "What is the fine for a third violation?", "--corpus", str(FIXTURE)],
         asker_factory=fake_factory,
     )
     out = capsys.readouterr().out

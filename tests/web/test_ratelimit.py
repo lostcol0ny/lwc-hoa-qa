@@ -68,7 +68,7 @@ def test_limiter_keys_do_not_contain_raw_ip() -> None:
 
 def test_limiter_fails_open_when_store_errors() -> None:
     class Broken(InMemoryCounterStore):
-        async def incr(self, key: str, amount: float, ttl_seconds: int) -> float:
+        async def incr(self, key: str, amount: int, ttl_seconds: int) -> int:
             raise ConnectionError("down")
 
     limiter = RateLimiter(Broken(), per_hour=1, per_day=1)

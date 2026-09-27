@@ -366,8 +366,8 @@ def test_fixture_history() -> None:
     assert blog.authority == Authority.informal
     assert blog.published_date == blog.effective_date == date(2022, 10, 20)
     assert blog.text_clean == (
-        "2nd offense - $50.00 fine, 3rd offense - $100.00, "
-        "4th and subsequent offense - $50.00 per day"
+        "1st offense - Written warning 2nd offense - $50.00 fine "
+        "3rd offense - $100.00 4th and subsequent offense - $50.00 per day"
     )
     assert declaration.authority == Authority.governing
     assert "($326.00) per Unit" in declaration.text_clean

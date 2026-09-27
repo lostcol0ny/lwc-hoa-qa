@@ -1,15 +1,20 @@
 import asyncio
-import importlib.util
 import logging
 import os
 
 import pytest
 from fastapi.testclient import TestClient
-from web_fakes import QUESTION, Harness, RecordingAsker, build_harness, make_settings
+from web_fakes import (
+    FIXTURE_CORPUS,
+    QUESTION,
+    Harness,
+    RecordingAsker,
+    build_harness,
+    make_settings,
+)
 
 from hoa_qa.budget import FailClosedBudgetStore
 from hoa_qa.models import Answer, Outcome
-from hoa_qa.web import deps as web_deps
 from hoa_qa.web.app import create_app
 from hoa_qa.web.deps import ServiceUnavailable, build_asker, get_asker
 from hoa_qa.web.settings import DISCLAIMER
@@ -118,6 +123,7 @@ def test_health_reports_corpus_and_leaks_no_env(
         "corpus_build_time": "2026-09-27T00:00:00+00:00",
         "chunk_count": 8,
         "documents_url": "https://lakewoodcreekhoa.com/",
+        "budget_config": "ok",
     }
     for value in os.environ.values():
         if len(value) >= 8:
@@ -131,27 +137,9 @@ def test_health_without_corpus_is_503(tmp_path) -> None:
     assert response.json()["status"] == "unavailable"
 
 
-def test_missing_qa_core_is_503_with_clear_message(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def no_qa_core(name: str) -> None:
-        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
-
-    monkeypatch.setattr(web_deps.importlib, "import_module", no_qa_core)
-    h = build_harness()
-    h.app.dependency_overrides.clear()  # use the real get_asker
-    response = ask(h)
-    assert response.status_code == 503
-    body = Answer.model_validate(response.json())
-    assert body.outcome == Outcome.error
-    assert "isn't set up yet" in body.answer_text
-
-
 def test_qa_core_without_api_keys_is_503(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    if importlib.util.find_spec("hoa_qa.ask") is None:
-        pytest.skip("QA core not installed")
     for var in ("TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     h = build_harness()
@@ -187,3 +175,54 @@ def test_shutdown_calls_asker_aclose() -> None:
     with h.client:
         h.app.state.asker = ClosingAsker()
     assert closed == [True]
+
+
+def test_fake_asker_is_impossible_in_production() -> None:
+    env = {
+        "VERCEL_ENV": "production",
+        "HOA_QA_FAKE_ASKER": "1",
+        "MONTHLY_BUDGET_USD": "5",
+        "CORPUS_PATH": str(FIXTURE_CORPUS),
+    }
+    # From the environment: the flag is dropped.
+    app = create_app(env=env)
+    assert app.state.settings.fake_asker is False
+    # Even a hand-built settings object with the flag set can't get the fake:
+    # without API keys the real asker can't be built, so it's a 503.
+    forced = make_settings(production=True, fake_asker=True)
+    with pytest.raises(ServiceUnavailable):
+        build_asker(forced, {})
+    h = build_harness(env=env, production=True, fake_asker=True)
+    h.app.dependency_overrides.clear()  # use the real get_asker
+    response = ask(h)
+    assert response.status_code == 503
+    assert h.app.state.asker is None
+
+
+def test_health_flags_budget_below_reservation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    h = build_harness(monthly_budget_usd=0.01, budget_reserve_per_request_usd=0.05)
+    with caplog.at_level(logging.WARNING), h.client:
+        body = h.client.get("/api/health").json()
+    assert body["budget_config"] == "budget_below_reservation"
+    assert "below the per-request reservation" in caplog.text
+
+
+def test_budget_warning_uses_the_askers_max_cost(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Expensive(RecordingAsker):
+        max_cost_usd = 0.5
+
+    h = build_harness(asker=Expensive(), monthly_budget_usd=0.2)
+    with caplog.at_level(logging.WARNING), h.client:
+        assert h.client.get("/api/health").json()["budget_config"] == "ok"
+        assert "below the per-request reservation" not in caplog.text
+        assert ask(h).json()["outcome"] == "budget_exhausted"
+        h.app.state.asker = h.asker  # what get_asker stores in production
+        assert (
+            h.client.get("/api/health").json()["budget_config"]
+            == "budget_below_reservation"
+        )
+    assert caplog.text.count("below the per-request reservation") == 1

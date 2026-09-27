@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -125,6 +125,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # R here is the env default; the asker's own bound is checked again
+        # when the first request builds it (see ``_check_budget_once``).
+        warn_if_budget_below_reservation(config, None)
         yield
         await aclose_if_present(getattr(app.state, "asker", None))
         stores = (counter_store, getattr(budget, "counters", None))
@@ -139,6 +142,8 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.settings = config
+    app.state.env = env
+    app.state.budget_checked = False
     app.state.budget_store = budget
     app.state.rate_limiter = RateLimiter(
         counter_store, config.rate_limit_per_hour, config.rate_limit_per_day
@@ -192,6 +197,9 @@ def create_app(
         # reserve (over budget, or the store erroring) refuses the question.
         request_id = uuid.uuid4().hex
         reserve_usd = reservation_amount(settings, asker)
+        if not request.app.state.budget_checked:
+            request.app.state.budget_checked = True
+            warn_if_budget_below_reservation(settings, asker)
         try:
             reservation = await budget_store.reserve(
                 reserve_usd, settings.monthly_budget_usd
@@ -251,6 +259,7 @@ def create_app(
 
     @app.get("/api/health")
     async def health(
+        request: Request,
         settings: Annotated[WebSettings, Depends(get_settings)],
     ) -> JSONResponse:
         try:
@@ -267,6 +276,10 @@ def create_app(
                 "corpus_build_time": corpus.manifest.build_time.isoformat(),
                 "chunk_count": corpus.manifest.chunk_count,
                 "documents_url": settings.documents_url,
+                # Uses the asker's max_cost_usd once a request has built it.
+                "budget_config": budget_config(
+                    settings, getattr(request.app.state, "asker", None)
+                ),
             }
         )
 
@@ -292,6 +305,27 @@ def reservation_amount(settings: WebSettings, asker: object) -> float:
         logger.warning("ignoring invalid asker max_cost_usd")
         return reserve
     return max(reserve, declared)
+
+
+BudgetConfig = Literal["ok", "budget_below_reservation"]
+
+
+def budget_config(settings: WebSettings, asker: object) -> BudgetConfig:
+    """``budget_below_reservation`` when ``MONTHLY_BUDGET_USD < R``: then no
+    question can ever be admitted. Not sensitive: it reveals neither amount."""
+    if settings.monthly_budget_usd < reservation_amount(settings, asker):
+        return "budget_below_reservation"
+    return "ok"
+
+
+def warn_if_budget_below_reservation(settings: WebSettings, asker: object) -> None:
+    if budget_config(settings, asker) == "budget_below_reservation":
+        logger.warning(
+            "MONTHLY_BUDGET_USD=%.6f is below the per-request reservation "
+            "R=%.6f; every question will get budget_exhausted",
+            settings.monthly_budget_usd,
+            reservation_amount(settings, asker),
+        )
 
 
 async def _reconcile(

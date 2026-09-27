@@ -25,11 +25,11 @@ from hoa_qa.ask import (
 )
 from hoa_qa.models import Corpus, Outcome, citation_url
 
-QUESTION = "How much is the fine for a second violation?"
+QUESTION = "How much is the fine for a third violation?"
 
 INVENTED = claim(
     "Seniors over 65 are exempt from all fines.",
-    ("rules-2023-fines", "First violation: $75."),
+    ("rules-2023-fines", "2nd violation: $75."),
     essential=False,
 )
 
@@ -164,7 +164,7 @@ def test_invented_claim_never_reaches_answer_text(
     assert INVENTED.statement in provider.prompts[1].user
     assert answer.outcome is Outcome.answered
     assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
-    assert [c.quote for c in answer.citations] == ["Second violation: $125."]
+    assert [c.quote for c in answer.citations] == ["3rd violation: $125."]
 
 
 def test_regenerate_fixes_failed_claim(
@@ -183,7 +183,7 @@ def test_failed_essential_claim_is_not_found(
     jev.support = invented_unsupported
     essential_invention = claim(
         "Fines are exempt for first-time owners.",
-        ("rules-2023-fines", "First violation: $75."),
+        ("rules-2023-fines", "2nd violation: $75."),
         essential=True,
     )
     bad = draft(FINE_CLAIM, essential_invention)
@@ -204,8 +204,8 @@ def test_only_conflict_claims_surviving_is_not_found(
         essential=False,
     )
     wrong = claim(
-        "A second violation costs $125 and is waived on holidays.",
-        ("rules-2023-fines", "Second violation: $125."),
+        "A third violation costs $125 and is waived on holidays.",
+        ("rules-2023-fines", "3rd violation: $125."),
         essential=False,
     )
     jev.relevance = {**jev.relevance, "blog-2022-violations": 0.6}
@@ -218,14 +218,14 @@ def test_fabricated_quote_fails_claim(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
     fake_quote = claim(
-        "A second violation is $500.",
-        ("rules-2023-fines", "Second violation: $500."),
+        "A third violation is $500.",
+        ("rules-2023-fines", "3rd violation: $500."),
         essential=False,
     )
     provider = FakeProvider([draft(FINE_CLAIM, fake_quote)] * 2)
     answer = ask(make_asker(corpus, settings, jev, provider)).answer
     assert "$500" not in answer.answer_text
-    assert [c.quote for c in answer.citations] == ["Second violation: $125."]
+    assert [c.quote for c in answer.citations] == ["3rd violation: $125."]
 
 
 def test_chunk_id_outside_provided_passages_fails_claim(
@@ -249,12 +249,12 @@ def test_one_bad_citation_does_not_sink_a_claim(
 ) -> None:
     mixed = claim(
         FINE_CLAIM.statement,
-        ("rules-2023-fines", "Second violation: $125."),
+        ("rules-2023-fines", "3rd violation: $125."),
         ("rules-2023-fines", "not in the passage"),
     )
     answer = ask(make_asker(corpus, settings, jev, FakeProvider([draft(mixed)]))).answer
     assert answer.outcome is Outcome.answered
-    assert [c.quote for c in answer.citations] == ["Second violation: $125."]
+    assert [c.quote for c in answer.citations] == ["3rd violation: $125."]
 
 
 def test_support_is_judged_per_claim(

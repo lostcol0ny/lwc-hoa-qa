@@ -9,7 +9,7 @@ import yaml
 from pydantic import ValidationError
 
 from hoa_qa.ingest import build
-from hoa_qa.ingest.cleanup import clean
+from hoa_qa.ingest.cleanup import clean, is_ocr_noise
 from hoa_qa.ingest.extract import Page, blog_text, printed_pages
 from hoa_qa.ingest.pii import check_pii
 from hoa_qa.ingest.section import citation, sections
@@ -220,10 +220,101 @@ def test_cleanup_guard_falls_back(raw: str, repaired: str) -> None:
 
 def test_cleanup_accepts_character_repair() -> None:
     fallbacks: list[str] = []
-    raw = "Tbe Board rnay levy a special assessrnent after a vote of Owners."
+    raw = "Tbe Board may levy a special assessrnent after a vote of Owners."
     fixed = "The Board may levy a special assessment after a vote of Owners."
     assert clean(raw, "c", lambda _: fixed, fallbacks) == fixed
     assert not fallbacks
+
+
+# Wave-3 review: the protected-word check is symmetric, with quantifiers and
+# money words protected, and only pure OCR noise may be deleted.
+BASE = "The Board may levy a special assessment after a vote of Owners."
+
+
+@pytest.mark.parametrize(
+    ("raw", "repaired"),
+    [
+        # A protected word appearing is as bad as one disappearing.
+        (
+            "Owners must now register every vehicle with the office.",
+            "Owners must not register every vehicle with the office.",
+        ),
+        (
+            "Pets are allowed, so leashes are required on common areas.",
+            "Pets are allowed, no leashes are required on common areas.",
+        ),
+        # Quantifiers.
+        (
+            "All Owners may use the pool subject to these rules and fees.",
+            "Any Owners may use the pool subject to these rules and fees.",
+        ),
+        (
+            "Each Owner may bring guests subject to these rules and fees.",
+            "Some Owner may bring guests subject to these rules and fees.",
+        ),
+        (
+            "The fee applies to every rental of the clubhouse on weekends.",
+            "The fee applies to any rental of the clubhouse on weekends.",
+        ),
+        # Money words.
+        (
+            "The deposit is three hundred dollars payable before the event.",
+            "The deposit is three hundred cents payable before the event.",
+        ),
+        # A garbled protected word can no longer be "repaired" into one.
+        (
+            "Tbe Board rnay levy a special assessrnent after a vote of Owners.",
+            "The Board may levy a special assessment after a vote of Owners.",
+        ),
+        # Deleting a real word, even a one-letter one, is not noise removal.
+        (
+            "The Board may levy a special assessment after a vote of all Owners.",
+            "The Board may levy a special assessment after vote of all Owners.",
+        ),
+        (
+            "The Board may levy a special assessment after a vote; I agree.",
+            "The Board may levy a special assessment after a vote; agree.",
+        ),
+        (
+            "The Board may levy a special assessment after a formal vote of Owners.",
+            BASE,
+        ),
+        # Inserting even pure noise is still an insertion.
+        (BASE, "The Board may levy a special ~ assessment after a vote of Owners."),
+        # Digits are never noise (and the numeric guard agrees).
+        (
+            "The Board may levy a special assessment after 2 votes of Owners.",
+            "The Board may levy a special assessment after votes of Owners.",
+        ),
+    ],
+)
+def test_cleanup_guard_is_symmetric_and_strict(raw: str, repaired: str) -> None:
+    fallbacks: list[str] = []
+    assert clean(raw, "c", lambda _: repaired, fallbacks) == raw
+    assert fallbacks == ["c"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "The Board may levy ~ a special assessment after a vote of Owners.",
+        "The Board may levy a special | assessment after a vote of Owners.",
+        "The Board may levy a special assessment -- after a vote of Owners.",
+        "The Board may levy a special assessment after a vote of Owners. ‘",
+        "The Board may levy a special assessment after a vote of j Owners.",
+    ],
+)
+def test_cleanup_allows_deleting_pure_ocr_noise(raw: str) -> None:
+    fallbacks: list[str] = []
+    assert clean(raw, "c", lambda _: BASE, fallbacks) == BASE
+    assert not fallbacks
+
+
+def test_is_ocr_noise() -> None:
+    for token in ("~", "|", "--", "‘", "•", "j", "Z"):
+        assert is_ocr_noise(token), token
+    for token in ("a", "A", "I", "i", "5", "no", "8.2", "(d)", "$", "%", "§", "&"):
+        assert not is_ocr_noise(token), token
 
 
 # N5: separator-free phone numbers and more street suffixes.

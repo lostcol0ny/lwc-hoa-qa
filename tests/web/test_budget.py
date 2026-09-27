@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import math
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -18,15 +19,21 @@ from hoa_qa.budget import (
     month_key,
     select_budget_store,
     select_counter_store,
+    usd_limit_to_micros,
+    usd_to_micros,
 )
 
 
 def test_month_key_is_utc_calendar_month() -> None:
-    assert month_key(datetime(2026, 9, 30, 23, 59, tzinfo=UTC)) == "budget:2026-09"
-    assert month_key(datetime(2026, 10, 1, tzinfo=UTC)) == "budget:2026-10"
+    assert (
+        month_key(datetime(2026, 9, 30, 23, 59, tzinfo=UTC)) == "budget_micros:2026-09"
+    )
+    assert month_key(datetime(2026, 10, 1, tzinfo=UTC)) == "budget_micros:2026-10"
     # 20:00 on Sep 30 in UTC-5 is already October in UTC.
     central = timezone(timedelta(hours=-5))
-    assert month_key(datetime(2026, 9, 30, 20, tzinfo=central)) == "budget:2026-10"
+    assert (
+        month_key(datetime(2026, 9, 30, 20, tzinfo=central)) == "budget_micros:2026-10"
+    )
 
 
 def test_month_rollover_starts_a_fresh_counter() -> None:
@@ -91,13 +98,13 @@ def test_upstash_budget_store_round_trip() -> None:
     assert empty == 0.0
     assert math.isclose(total, 0.015)
     assert math.isclose(spend, 0.015)
-    assert fake.ttls == {"budget:2026-09": BUDGET_TTL_SECONDS}
+    assert fake.ttls == {"budget_micros:2026-09": BUDGET_TTL_SECONDS}
     paths = [path for path, _, _ in fake.requests]
     assert paths == ["/", "/multi-exec", "/multi-exec", "/"]
     _, first_incr, auth = fake.requests[1]
     assert first_incr == [
-        ["INCRBYFLOAT", "budget:2026-09", "0.012500000000"],
-        ["EXPIRE", "budget:2026-09", str(BUDGET_TTL_SECONDS)],
+        ["INCRBY", "budget_micros:2026-09", "12500"],
+        ["EXPIRE", "budget_micros:2026-09", str(BUDGET_TTL_SECONDS)],
     ]
     assert auth == "Bearer test-token"
 
@@ -150,7 +157,7 @@ def test_reconcile_settles_against_the_reserving_month() -> None:
 
     async def scenario() -> tuple[float, float]:
         reservation = await store.reserve(0.05, 1.0)
-        assert reservation is not None and reservation.key == "budget:2026-09"
+        assert reservation is not None and reservation.key == "budget_micros:2026-09"
         clock.now = datetime(2026, 10, 1, 0, 0, 1, tzinfo=UTC)
         await store.reconcile(reservation, 0.01)
         october = await store.get_month_spend()
@@ -185,17 +192,16 @@ def test_upstash_reserve_uses_eval_and_reconciles() -> None:
         "EVAL",
         RESERVE_SCRIPT,
         1,
-        "budget:2026-09",
-        "0.050000000000",
-        "0.080000000000",
+        "budget_micros:2026-09",
+        "50000",
+        "80000",
         str(BUDGET_TTL_SECONDS),
-        "0.000000001000",
     ]
-    # Reconcile is a negative INCRBYFLOAT on the reservation's key.
+    # Reconcile is a negative INCRBY (micro-dollars) on the reservation's key.
     _, reconcile_body, _ = fake.requests[2]
     assert reconcile_body == [
-        ["INCRBYFLOAT", "budget:2026-09", "-0.040000000000"],
-        ["EXPIRE", "budget:2026-09", str(BUDGET_TTL_SECONDS)],
+        ["INCRBY", "budget_micros:2026-09", "-40000"],
+        ["EXPIRE", "budget_micros:2026-09", str(BUDGET_TTL_SECONDS)],
     ]
 
 
@@ -214,4 +220,100 @@ def test_upstash_reserve_errors_raise(response: httpx.Response) -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: response))
     store = UpstashCounterStore("https://example-upstash.io", "t", client=client)
     with pytest.raises(UpstashError):
-        asyncio.run(store.reserve("k", 0.05, 1.0, 10))
+        asyncio.run(store.reserve("k", 50_000, 1_000_000, 10))
+
+
+# --- Integer micro-dollars ---------------------------------------------------
+
+
+def test_usd_micros_conversion_rounds_conservatively() -> None:
+    assert usd_to_micros(0.05) == 50_000  # no float-noise bump
+    assert usd_to_micros(0.0000001) == 1  # charges round up
+    assert usd_to_micros(0.0123456789) == 12_346
+    assert usd_limit_to_micros(0.0000019) == 1  # limits round down
+    assert usd_limit_to_micros(5.0) == 5_000_000
+    for bad in (math.nan, math.inf):
+        with pytest.raises(ValueError):
+            usd_to_micros(bad)
+
+
+def test_many_small_amounts_sum_exactly() -> None:
+    """Exact to 1 µ$: float accumulation (0.1 + 0.2 != 0.3) can't drift."""
+    store = InMemoryBudgetStore(clock=FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+
+    async def scenario() -> float:
+        for _ in range(1000):
+            await store.add_spend(0.1)
+            await store.add_spend(0.2)
+        return await store.get_month_spend()
+
+    assert asyncio.run(scenario()) == 300.0
+
+
+def test_budget_of_exactly_n_reservations_admits_n() -> None:
+    store = InMemoryBudgetStore(clock=FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+
+    async def scenario() -> list[bool]:
+        return [await store.reserve(0.1, 0.3) is not None for _ in range(4)]
+
+    # With floats, 0.1 + 0.1 + 0.1 > 0.3 needed an epsilon; integers don't.
+    assert asyncio.run(scenario()) == [True, True, True, False]
+
+
+def test_upstash_counters_refuse_non_integer_amounts() -> None:
+    store = upstash_store(FakeUpstash(), FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+    with pytest.raises(TypeError):
+        asyncio.run(store.counters.incr("k", 0.5, 10))  # type: ignore[arg-type]
+
+
+def test_legacy_float_month_key_is_ignored() -> None:
+    """A pre-launch ``budget:YYYY-MM`` float value can't break INCRBY."""
+    fake = FakeUpstash()
+    fake.data["budget:2026-09"] = "0.0500000000000000028"
+    store = upstash_store(fake, FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+
+    async def scenario() -> float:
+        reservation = await store.reserve(0.05, 1.0)
+        assert reservation is not None
+        await store.reconcile(reservation, 0.01)
+        return await store.get_month_spend()
+
+    assert asyncio.run(scenario()) == 0.01
+    assert fake.data["budget:2026-09"] == "0.0500000000000000028"
+    # And INCRBY really would have rejected it (the emulation matches Redis).
+    assert fake.handler_status(["INCRBY", "budget:2026-09", "1"]) == 400
+
+
+def test_reserve_script_runs_under_lua() -> None:
+    """RESERVE_SCRIPT itself, executed by lupa: admit, refuse, TTL, totals."""
+    fake = FakeUpstash()
+    run = fake.run
+    assert run(["EVAL", RESERVE_SCRIPT, 1, "m", "60", "100", "99"]) == [1, 60]
+    assert fake.ttls == {"m": 99}
+    assert run(["EVAL", RESERVE_SCRIPT, 1, "m", "41", "100", "99"]) == [0, 60]
+    assert run(["EVAL", RESERVE_SCRIPT, 1, "m", "40", "100", "99"]) == [1, 100]
+    assert fake.data["m"] == "100"
+
+
+# --- The lock is what makes in-memory reservation atomic ---------------------
+
+
+async def _concurrent_reservations(store: InMemoryBudgetStore, n: int) -> int:
+    results = await asyncio.gather(*(store.reserve(0.05, 0.15) for _ in range(n)))
+    return sum(r is not None for r in results)
+
+
+def test_concurrent_in_memory_reservations_respect_budget() -> None:
+    store = InMemoryBudgetStore(clock=FixedClock(datetime(2026, 9, 27, tzinfo=UTC)))
+    assert asyncio.run(_concurrent_reservations(store, 20)) == 3
+    assert math.isclose(asyncio.run(store.get_month_spend()), 0.15)
+
+
+def test_without_the_lock_reservations_overspend() -> None:
+    """Proves the concurrency test has teeth: remove the lock and it fails."""
+    counters = InMemoryCounterStore()
+    counters._lock = contextlib.nullcontext()  # type: ignore[assignment]
+    store = InMemoryBudgetStore(
+        clock=FixedClock(datetime(2026, 9, 27, tzinfo=UTC)), counters=counters
+    )
+    assert asyncio.run(_concurrent_reservations(store, 20)) > 3

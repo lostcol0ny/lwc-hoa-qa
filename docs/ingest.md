@@ -19,8 +19,10 @@ them, checks contact information, and writes `build/corpus.json` (the
 chunk counts by document and a token estimate (normalized Unicode characters / 4,
 rounded up per chunk). `build/` is ignored by git.
 
-For optional build-time OCR repair, set `ANTHROPIC_API_KEY` in the environment and
-omit `--no-llm`. `INGEST_CLEANUP_MODEL` defaults to `claude-haiku-4-5-20251001`, the
+**LLM OCR cleanup is off by default.** CI builds with `--no-llm` unless a manual
+`workflow_dispatch` run of `build-corpus.yml` sets the input `llm_cleanup: true`
+*and* the `ANTHROPIC_API_KEY` secret exists (see below). Locally, set
+`ANTHROPIC_API_KEY` in the environment and omit `--no-llm`. `INGEST_CLEANUP_MODEL` defaults to `claude-haiku-4-5-20251001`, the
 small, fast Haiku tier confirmed against [Anthropic's live model table](https://platform.claude.com/docs/en/models/overview)
 on 2026-09-27. Runtime Q&A never invokes this cleanup. Only Declaration, Bylaws,
 Articles, and historical Rules text goes through it; digital documents and posts
@@ -35,13 +37,22 @@ records the chunk ID in `manifest.ocr_fallbacks`:
    (including subsection letters, e.g. `8.2(d)(4)`) must match exactly.
 2. The text must stay near-identical: `difflib` character ratio ≥ 0.9 and word
    count within ±3%.
-3. Word-level edits must be character repairs: no whole word inserted or deleted
-   (so dropping "not" or adding "only" fails even in a long chunk); each replaced
-   span may change at most two characters or a quarter of its length; and a
-   replaced span that contains a protected word (number words one…ninety,
-   hundred, thousand; `not`/`no`/`shall`/`may`/`must`/`only`/…) must keep exactly
-   those words. A garbled source word can still be repaired into one ("rnay" →
-   "may").
+3. Protected words must survive as an **identical multiset**, over the whole
+   text and within every replaced span: number words (one…ninety, hundred,
+   thousand, half, quarter), modals and negations (`not`/`no`/`nor`/`never`/
+   `none`/`shall`/`may`/`must`/`without`/`prohibited`/`permitted`/`required`),
+   quantifiers (`all`/`any`/`each`/`every`/`some`/`only`/`except`/`unless`) and
+   money words (`dollar(s)`/`cent(s)`). The check is symmetric, so a protected
+   word can't appear either: `now` → `not`, `so` → `no` and `all` → `any` fall
+   back. The tradeoff is that a garbled protected word ("rnay") can't be
+   repaired into one ("may"); that chunk keeps its raw text.
+4. Word-level edits must be character repairs. No word may be inserted (so
+   adding "only" fails even in a long chunk). The only deletions allowed are
+   pure OCR noise: a token with no letters, digits or meaningful symbols (`~`,
+   `|`, `--`, but never `$`, `%`, `§`, `&`), or a single letter that isn't a
+   word (anything except `a`/`I`). Noise tokens don't count toward the ±3% word
+   drift in check 2. Each replaced span may change at most two characters or a
+   quarter of its length.
 
 These guards are deliberately conservative; a real LLM run may show a higher
 fallback rate than the old numeric-only guard. All text retains a
@@ -265,7 +276,11 @@ and monthly (cron `17 6 1 * *`). The monthly run re-crawls the website pages
 retention for deploy. It installs `uv sync --locked --group ingest` and uses the
 checkout/setup-uv pins from CI, locked dependencies, read-only
 permissions, and disabled persisted checkout credentials. When the Anthropic
-secret exists it performs cleanup; otherwise it adds `--no-llm`. It uploads
+secret exists **and** a manual run set the `llm_cleanup` input to `true`, it
+performs cleanup; every other run (monthly schedule, pushes, manual runs without
+the input) adds `--no-llm`, and the key isn't even exposed to the build step.
+A requested cleanup without the secret logs a warning and builds with
+`--no-llm`. The step summary records which mode ran. It uploads
 **`corpus`**, containing exactly **`corpus.json`** and **`corpus_manifest.json`**,
 with 90-day retention. This matches deploy's lookup of `build-corpus.yml` on main.
 A failed build never uploads an artifact.

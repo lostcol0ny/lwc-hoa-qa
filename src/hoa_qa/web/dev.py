@@ -10,10 +10,8 @@ from hoa_qa.models import Answer, Citation, Corpus, Outcome, citation_url
 from hoa_qa.web.settings import DISCLAIMER
 
 
-@dataclass
+@dataclass(frozen=True)
 class FakeAskResult:
-    # Not frozen: the wave-2 ``AskResult`` protocol declares plain attributes,
-    # which pyright treats as settable, so a frozen class wouldn't match it.
     answer: Answer
     estimated_cost_usd: float
 
