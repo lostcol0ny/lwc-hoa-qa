@@ -6,9 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=1.8,<2",
+    "beautifulsoup4>=4.15.0",
     "fastapi>=0.141.1,<1",
     "httpx>=0.28.1,<1",
     "pydantic>=2,<3",
+    "pymupdf>=1.28.2",
+    "pyyaml>=6.0.3",
     "typesafe-sdk>=0.7.2,<0.8",
     "uvicorn>=0.54.0,<1",
 ]

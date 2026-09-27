@@ -1,0 +1,44 @@
+name: Build corpus
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - sources.yaml
+      - src/hoa_qa/ingest/**
+      - .github/workflows/build-corpus.yml
+permissions:
+  contents: read
+env:
+  UV_LOCKED: "1"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Build and validate corpus
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INGEST_CLEANUP_MODEL: claude-haiku-4-5-20251001
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            uv run python -m hoa_qa.ingest build --out build/
+          else
+            uv run python -m hoa_qa.ingest build --out build/ --no-llm
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: corpus
+          path: |
+            build/corpus.json
+            build/corpus_manifest.json
+          if-no-files-found: error
+          retention-days: 90

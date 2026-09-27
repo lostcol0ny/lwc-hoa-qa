@@ -1,0 +1,189 @@
+- doc_id: declaration
+  title: Declaration
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/3d427ceb-9051-40d3-b79d-cbabab98bc72/LWC-Declaration-of-CC.pdf?ver=1749305476488
+  kind: pdf
+  authority: governing
+  effective_date: '2001-08-09'
+  exclude_pages:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 68
+  - 69
+  - 70
+  - 71
+  - 72
+  - 73
+  - 74
+  - 75
+  - 76
+  - 77
+  - 78
+  - 79
+  notes: Table of contents on PDF pages 2–5 excluded (body retained). Appended bylaws on PDF pages 68–79 excluded; standalone bylaws kept as canonical.
+    Substantive Declaration exhibits retained, including pages 80–83.
+- doc_id: clubhouse
+  title: Clubhouse Rental Agreement
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/Clubhouse%20Rental%20Agreement%20-%20Lakewood%20Creek%20HO.pdf?ver=1749305476488
+  kind: pdf
+  authority: rules
+  effective_date: '2022-05-12'
+- doc_id: arch-form
+  title: Architectural Improvement Application
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/Architechural%20Improvement%20-%20modification%20form%20.pdf?ver=1749305476488
+  kind: pdf
+  authority: form
+  effective_date: '2010-01-01'
+  notes: Year-only date represented as January 1.
+- doc_id: rules-2023
+  title: Rules 2023
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/30fb19ff-1786-40c2-8a00-19cb35d0f8b7/Rules%20%26%20Regs%20updated%202023-2.pdf?ver=1751387050977
+  kind: pdf
+  authority: rules
+  effective_date: '2023-10-24'
+  notes: PDF pages 16–19 are scanned fence/mailbox exhibits with existing text layers
+    (visually reviewed). Retain OCR; diagram details are not fully searchable.
+- doc_id: articles
+  title: Articles of Incorporation
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/LWC%20Articles%20of%20Incorporation%20(searchable).pdf?ver=1749305476488
+  kind: pdf
+  authority: governing
+  effective_date: '2001-01-01'
+  notes: Year-only date represented as January 1.
+- doc_id: bylaws
+  title: Bylaws
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/LWC%20Bylaws%20(searchable).pdf?ver=1749236187030
+  kind: pdf
+  authority: governing
+  effective_date: '2001-01-01'
+  notes: Year-only date represented as January 1.
+- doc_id: rules-2016
+  title: Rules 2016
+  url: https://img1.wsimg.com/blobby/go/50f4d313-ccd7-4664-aa44-e5470dc5f8cd/downloads/LWC%20Rules%20%26%20Regulations%20(searchable).pdf?ver=1686077861024
+  kind: pdf
+  authority: superseded
+  effective_date: '2016-06-07'
+  superseded_by: rules-2023
+  exclude_pages:
+  - 3
+  notes: PDF page 3 is blank apart from printed page number 2; historical rules only.
+- doc_id: newsletter-2025-03
+  title: News Letter March 2025
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/news-letter-march-2025
+  kind: blog_post
+  authority: informal
+  effective_date: '2025-05-29'
+  notes: March 2025 content; displayed post date 2025-05-29 used for ordering per
+    ingest contract.
+- doc_id: minutes-2024-12-20
+  title: Minutes December 2O, 2024
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/minutes-december-2o-2024
+  kind: blog_post
+  authority: board_decision
+  effective_date: '2024-12-20'
+- doc_id: minutes-2024-03-19
+  title: Minutes March 19, 2024
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/minutes-march-19-2024
+  kind: blog_post
+  authority: board_decision
+  effective_date: '2024-03-19'
+- doc_id: minutes-2023-10-12
+  title: Minutes October 12, 2023
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/minutes-october-12-2023
+  kind: blog_post
+  authority: board_decision
+  effective_date: '2023-10-12'
+- doc_id: minutes-2023-06-09
+  title: Minutes June 9, 2023
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/minutes-june-9-2023
+  kind: blog_post
+  authority: board_decision
+  effective_date: '2023-06-09'
+- doc_id: payment-options
+  title: NEW Payment Options Document
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/new-payment-options-document
+  kind: blog_post
+  authority: informal
+  effective_date: '2024-07-01'
+- doc_id: minutes-2022-12-29
+  title: 'December 29 2022 Minutes '
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/december-29-2022-minutes
+  kind: blog_post
+  authority: board_decision
+  effective_date: '2022-12-29'
+- doc_id: minutes-2022-12-06
+  title: Meeting Minutes December 6th 2022
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/meeting-minutes-december-6th-2022
+  kind: blog_post
+  authority: board_decision
+  effective_date: '2022-12-06'
+- doc_id: email-answers
+  title: Answers to questions from email.
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/answers-to-questions-from-email
+  kind: blog_post
+  authority: informal
+  effective_date: '2023-06-14'
+  exclude: true
+  exclude_reason: Disputed allegations about named individuals; intentionally not
+    fetched or indexed.
+- doc_id: unsolicited-email
+  title: Letter to Homeowners about unsolicited email.
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/letter-to-homeowners-about-unsolicited-email
+  kind: blog_post
+  authority: informal
+  effective_date: '2023-06-13'
+- doc_id: newsletter-2022-winter
+  title: Lakewood Creek HOA 2022 Winter Newsletter from the President
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/lakewood-creek-hoa-2022-winter-newsletter-from-the-president
+  kind: blog_post
+  authority: informal
+  effective_date: '2022-11-07'
+- doc_id: violation-tips
+  title: Tips for Responding to HOA Violations
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/tips-for-responding-to-hoa-violations
+  kind: blog_post
+  authority: informal
+  effective_date: '2022-10-20'
+- doc_id: amendments-committee
+  title: Amendments to the Declaration Committee
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/amendments-to-the-declaration-committee
+  kind: blog_post
+  authority: informal
+  effective_date: '2022-08-26'
+- doc_id: meeting-recap-2022-08-18
+  title: HOA Meeting Recap from 8.18.22
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/hoa-meeting-recap-from-81822
+  kind: blog_post
+  authority: informal
+  effective_date: '2022-08-20'
+- doc_id: meeting-notice-2022-08
+  title: HOA Meeting
+  url: https://lakewoodcreekhoa.com/minutes-%26-newsletters/f/hoa-meeting
+  kind: blog_post
+  authority: informal
+  effective_date: '2022-08-01'
+- doc_id: home
+  title: Home assessment banner
+  url: https://lakewoodcreekhoa.com/
+  kind: web_page
+  authority: website
+  effective_date: '2026-09-27'
+  notes: Effective date is the reviewed crawl date. Refresh this date when refreshing
+    these source bytes.
+- doc_id: faq
+  title: Frequently Asked Questions
+  url: https://lakewoodcreekhoa.com/faq
+  kind: web_page
+  authority: website
+  effective_date: '2026-09-27'
+  notes: Effective date is the reviewed crawl date. Refresh this date when refreshing
+    these source bytes.
+- doc_id: about
+  title: About the HOA
+  url: https://lakewoodcreekhoa.com/about
+  kind: web_page
+  authority: website
+  effective_date: '2026-09-27'
+  notes: Effective date is the reviewed crawl date. Refresh this date when refreshing
+    these source bytes.
