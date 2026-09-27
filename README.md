@@ -197,6 +197,65 @@ Do these in order.
 10. In GitHub settings → Emails, enable **Block command line pushes that expose
     my email**.
 
+### Day-2 operations
+
+Vercel reads environment variables when a deployment is built, so after
+changing one, **redeploy**: push to `main`, or open the latest **Deploy** run on
+`main` in Actions and choose **Re-run all jobs**.
+
+**Rotate a key.** Create the new key at the provider (Anthropic console,
+TypeSafe, Upstash, Vercel account tokens). Update it everywhere it's used:
+the GitHub secret (`TYPESAFE_API_KEY`/`ANTHROPIC_API_KEY` for eval and the
+opt-in cleanup build, `VERCEL_TOKEN` for deploy) and the Vercel environment
+variable (the two API keys, `UPSTASH_REDIS_REST_TOKEN`). Redeploy, check
+`/api/health` and ask one question, then revoke the old key.
+
+**The budget tripped** (every question gets `budget_exhausted`):
+
+- To keep answering this month, raise `MONTHLY_BUDGET_USD` in Vercel and
+  redeploy. Otherwise do nothing: the counter is per UTC calendar month, so
+  answers resume at 00:00 UTC on the 1st.
+- To see the spend, open the Upstash database (console → Data Browser, or its
+  CLI) and `GET budget_micros:YYYY-MM` (e.g. `budget_micros:2026-10`). The
+  value is integer micro-dollars: divide by 1,000,000 for dollars. It includes
+  the reservation R of any question in flight.
+- **Avoid resetting or deleting that key.** It is the only record of this
+  month's spend, so resetting it lets the month spend up to the budget again
+  on top of what was already spent (provider limits are then the only cap).
+  And questions in flight still reconcile against it afterwards (a negative
+  `INCRBY`), which can push it below zero and admit more than the budget. If
+  you must correct it, change it with `INCRBY`/`DECRBY` by a known amount while
+  no questions are in flight (for example with the bot taken offline, below),
+  never `DEL`. Raising `MONTHLY_BUDGET_USD` is almost always the better fix.
+
+**Refresh the corpus.** **Build corpus** runs monthly (06:17 UTC on the 1st),
+on pushes to `main` that touch `sources.yaml` or the ingest code, and by hand.
+Deploy doesn't run when a new corpus is built. It bundles the latest successful
+`corpus` artifact from `main` each time it runs, so trigger a deploy afterwards
+(push, or re-run the latest Deploy run as above) and check `chunk_count` and
+`corpus_build_time` on `/api/health`. The artifact is kept for 90 days, and
+the monthly run keeps a fresh one around. If Deploy says the artifact expired,
+run **Build corpus** first. When chunk ids change, refresh
+`evals/corpus_ids.txt` (`hoa-qa eval --write-ids --corpus build/corpus.json`).
+The eval stops before any spend if a golden case cites an id that's gone.
+
+**If something goes wrong** (bad answers, a spend spike, abuse), take the bot
+offline, fastest first:
+
+1. Add a Vercel Firewall custom rule: `Request Path` equals `/api/ask` →
+   **Deny**. It takes effect when published, with no redeploy. The page stays
+   up, and questions fail before any function runs.
+2. Set `MONTHLY_BUDGET_USD=0` and redeploy. Every question then gets the
+   friendly `budget_exhausted` answer with the documents link, and nothing is
+   spent (`/api/health` shows `budget_below_reservation`).
+3. If a key may have leaked, revoke it at the provider (Anthropic console,
+   TypeSafe). The pipeline then fails with a generic error and stops spending.
+4. Roll back to a known-good deployment (Vercel → Deployments → Instant
+   Rollback), or pause or delete the Vercel project.
+
+Undo in reverse order, and check `/api/health` before removing the Firewall
+rule.
+
 ## Repository layout
 
 ```text

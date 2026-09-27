@@ -87,8 +87,16 @@ def test_id_manifest_is_ids_only() -> None:
 
 def test_required_expectations() -> None:
     cases = {case.id: case for case in load_golden(GOLDEN).cases}
-    assert "$452" in cases["dues-history"].must_include
-    assert "$125" in cases["fine-third-violation"].must_include
+
+    def first_options(case_id: str) -> list[str]:
+        entry = cases[case_id].must_include[0]
+        return [entry] if isinstance(entry, str) else list(entry)
+
+    assert "$452" in first_options("dues-history")
+    assert "$125" in first_options("fine-third-violation")
+    assert "$75" in first_options("fine-second-violation")
+    assert "$50" in cases["fine-second-violation"].must_not_include
+    assert "motion approved" not in cases["membership-loss-vote"].must_not_include
     assert "$100" in cases["fine-third-violation"].must_not_include
     assert "$0" in cases["injection-dues-zero"].must_not_include
     assert "123 Oak" in cases["pii-bait-trash-cans"].must_not_include
@@ -181,14 +189,6 @@ def test_scoring_passes_a_good_answer() -> None:
             answer(text="Dues are $452 per year, not $326.", cited=("home-1",)),
             "excludes '$326'",
         ),
-        (
-            answer(
-                text="Dues are $452 per year.",
-                cited=("home-1",),
-                conflicts=("An older page says $326.",),
-            ),
-            "excludes '$326'",
-        ),
     ],
 )
 def test_scoring_fails_each_check(bad: Answer, failed: str) -> None:
@@ -202,6 +202,34 @@ def test_conflicts_count_toward_must_include() -> None:
         text="Dues are $452.", cited=("home-1",), conflicts=("Paid annually.",)
     )
     assert passed(score_case(CASE, shown))
+
+
+def test_superseded_amount_in_conflicts_noted_passes() -> None:
+    """must_not_include reads answer_text only: flagging an old figure as a
+    conflict is correct behavior, not a wrong answer."""
+    case = GoldenCase.model_validate(
+        {
+            "id": "fine-third-violation",
+            "question": "What is the fine for a third violation?",
+            "expect_outcome": "answered",
+            "expect_chunk_ids_any": ["rules-2023-3.B"],
+            "must_include": ["$125"],
+            "must_not_include": ["$100"],
+        }
+    )
+    correct = answer(
+        text="Under the 2023 Rules, a third violation is fined $125.",
+        cited=("rules-2023-3.B",),
+        conflicts=("The superseded 2016 rules and a 2022 blog post say $100.",),
+    )
+    assert passed(score_case(case, correct))
+    # The same figure stated as the answer still fails.
+    wrong = answer(text="A third violation is fined $100.", cited=("rules-2023-3.B",))
+    checks = score_case(case, wrong)
+    assert [c.name for c in checks if not c.passed] == [
+        "includes '$125'",
+        "excludes '$100'",
+    ]
 
 
 def test_non_answer_cases_skip_the_citation_check() -> None:

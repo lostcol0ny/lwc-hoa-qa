@@ -1,10 +1,11 @@
 """Golden-set evaluation (spec §7): run the real asker over ``evals/golden.yaml``.
 
 Each case names the expected outcome, chunk ids of which at least one must be
-cited, and phrases that must or must not appear in what the user is shown
-(``answer_text`` plus ``conflicts_noted``, case-insensitively; citation quotes
-are verbatim document text, so they're not scored). The runner prints a
-pass/fail table and the total cost, and fails below a minimum pass rate.
+cited, and phrases that must or must not appear (case-insensitive substrings).
+The two phrase checks read different text on purpose (see ``GoldenCase``).
+Citation quotes are verbatim document text, so they're never scored. The runner
+prints a pass/fail table and the total cost, and fails below a minimum pass
+rate.
 
 The golden questions are committed fixtures, not user input, so the JSON
 report includes the answers for review. Nothing here logs question or answer
@@ -31,6 +32,17 @@ PhraseOrAlternatives = Phrase | Annotated[list[Phrase], Field(min_length=1)]
 
 
 class GoldenCase(BaseModel):
+    """One golden question and what a correct answer looks like.
+
+    - ``must_include``: every entry must appear in ``answer_text`` **or**
+      ``conflicts_noted`` (both are shown to the user). An entry that is a list
+      of alternatives passes if any one of them appears.
+    - ``must_not_include``: no entry may appear in ``answer_text``.
+      ``conflicts_noted`` is **not** checked, because reporting a superseded or
+      informal figure there ("the 2016 rules said $100") is the correct way to
+      flag a conflict, not a wrong answer.
+    """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
@@ -120,6 +132,10 @@ def _shown_text(answer: Answer) -> str:
     return " ".join((answer.answer_text, *answer.conflicts_noted)).casefold()
 
 
+def _answer_text(answer: Answer) -> str:
+    return answer.answer_text.casefold()
+
+
 def score_case(case: GoldenCase, answer: Answer) -> list[Check]:
     """One check per expectation; the case passes only if all pass."""
     checks = [
@@ -145,9 +161,10 @@ def score_case(case: GoldenCase, answer: Answer) -> list[Check]:
                 passed=any(option.casefold() in shown for option in options),
             )
         )
+    stated = _answer_text(answer)  # conflicts_noted may cite superseded figures
     for phrase in case.must_not_include:
         checks.append(
-            Check(name=f"excludes {phrase!r}", passed=phrase.casefold() not in shown)
+            Check(name=f"excludes {phrase!r}", passed=phrase.casefold() not in stated)
         )
     return checks
 
