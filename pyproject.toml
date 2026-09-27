@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Document-grounded Lakewood Creek HOA Q&A"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2,<3"]
+dependencies = [
+    "anthropic>=1.8,<2",
+    "pydantic>=2,<3",
+    "typesafe-sdk>=0.7.2,<0.8",
+]
 
 [project.scripts]
 hoa-qa = "hoa_qa.cli:main"
@@ -38,3 +42,6 @@ venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: calls the real Jev and Anthropic APIs (needs TYPESAFE_API_KEY and ANTHROPIC_API_KEY)",
+]
