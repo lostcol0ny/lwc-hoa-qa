@@ -12,6 +12,7 @@ from hoa_qa.models import (
     Answer,
     Authority,
     Chunk,
+    Citation,
     CorpusManifest,
     Outcome,
     authority_rank,
@@ -125,7 +126,7 @@ def test_citation_url(
 
 def test_load_fixture() -> None:
     corpus = load_corpus(FIXTURE)
-    assert corpus.manifest.chunk_count == len(corpus.chunks) == 6
+    assert corpus.manifest.chunk_count == len(corpus.chunks) == 8
     assert corpus.chunks[3].superseded_by == "rules-2023"
     assert corpus.manifest.build_time.tzinfo is not None
 
@@ -163,9 +164,9 @@ def test_response_outcomes(outcome: Outcome) -> None:
         request_id="test-request",
         outcome=outcome,
         answer_text="Test response",
-        citations=[],
+        citations=(),
         confidence=None,
-        conflicts_noted=[],
+        conflicts_noted=(),
         disclaimer="Unofficial",
     )
     assert Answer.model_validate_json(answer.model_dump_json()) == answer
@@ -178,9 +179,9 @@ def test_invalid_confidence(confidence: Any) -> None:
             request_id="test",
             outcome=Outcome.answered,
             answer_text="Test",
-            citations=[],
+            citations=(),
             confidence=confidence,
-            conflicts_noted=[],
+            conflicts_noted=(),
             disclaimer="",
         )
 
@@ -207,3 +208,180 @@ def test_cited_answer(confidence: float) -> None:
     )
     assert answer.citations[0].chunk_id == "bylaws-3.4"
     assert answer.confidence == confidence
+
+
+@pytest.mark.parametrize("authority", list(Authority))
+@pytest.mark.parametrize("replacement", [None, "rules-2023"])
+def test_supersession_contract(
+    chunk_data: dict[str, Any], authority: Authority, replacement: str | None
+) -> None:
+    data = {**chunk_data, "authority": authority, "superseded_by": replacement}
+    if (authority == Authority.superseded) == (replacement is not None):
+        assert Chunk.model_validate(data).superseded_by == replacement
+    else:
+        with pytest.raises(ValidationError, match="superseded"):
+            Chunk.model_validate(data)
+
+
+@pytest.mark.parametrize("problem", ["replacement", "count", "hash"])
+def test_corpus_integrity(tmp_path: Path, problem: str) -> None:
+    data = json.loads(FIXTURE.read_text())
+    if problem == "replacement":
+        # A chunk ID is not a document ID.
+        data["chunks"][3]["superseded_by"] = "rules-2023-fines"
+        message = "superseded_by"
+    elif problem == "count":
+        data["manifest"]["chunk_count"] = 7
+        message = "chunk_count"
+    else:
+        del data["manifest"]["source_hashes"]["bylaws"]
+        message = "source_hashes"
+    path = tmp_path / "invalid.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValidationError, match=message):
+        load_corpus(path)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript:alert(1)",
+        "data:text/html,test",
+        "http://example.org/a.pdf",
+        "https://user:pass@example.org/a.pdf",
+        "https://user@example.org/",
+        "https://@example.org/",
+    ],
+)
+def test_unsafe_urls(chunk_data: dict[str, Any], url: str) -> None:
+    with pytest.raises(ValidationError):
+        Chunk.model_validate({**chunk_data, "source_url": url})
+    with pytest.raises(ValidationError):
+        Citation(chunk_id="test", citation_label="Test", url=url, quote="Test")
+
+
+def test_https_citation_fragment() -> None:
+    url = "https://example.org/a.pdf?ver=123#page=2"
+    assert (
+        Citation(chunk_id="test", citation_label="Test", url=url, quote="").url == url
+    )
+
+
+@pytest.mark.parametrize("field", ["id", "doc_id", "doc_title", "citation_label"])
+def test_empty_chunk_identifiers(chunk_data: dict[str, Any], field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        Chunk.model_validate({**chunk_data, field: ""})
+
+
+@pytest.mark.parametrize("field", ["chunk_id", "citation_label"])
+def test_empty_citation_identifiers(field: str) -> None:
+    data = dict(
+        chunk_id="test", citation_label="Test", url="https://example.org/", quote=""
+    )
+    data[field] = ""
+    with pytest.raises(ValidationError, match=field):
+        Citation.model_validate(data)
+
+
+def test_empty_request_id() -> None:
+    with pytest.raises(ValidationError, match="request_id"):
+        Answer(
+            request_id="",
+            outcome=Outcome.not_found,
+            answer_text="",
+            citations=(),
+            confidence=None,
+            conflicts_noted=(),
+            disclaimer="",
+        )
+
+
+@pytest.mark.parametrize("timestamp", ["2026-09-27T00:00:00", "2026-09-27"])
+def test_naive_build_time(timestamp: str) -> None:
+    data = json.loads(FIXTURE.read_text())["manifest"]
+    data["build_time"] = timestamp
+    with pytest.raises(ValidationError):
+        CorpusManifest.model_validate(data)
+
+
+@pytest.mark.parametrize("field", ["effective_date", "published_date"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        0,
+        86400,
+        0.0,
+        True,
+        "2026-01-01T00:00:00",
+        "2026-01-01T00:00:00Z",
+        "2026",
+        "20260101",
+    ],
+)
+def test_strict_dates(chunk_data: dict[str, Any], field: str, value: Any) -> None:
+    data = {**chunk_data, field: value}
+    with pytest.raises(ValidationError):
+        Chunk.model_validate(data)
+    with pytest.raises(ValidationError):
+        Chunk.model_validate_json(json.dumps(data))
+
+
+def test_python_date_objects(chunk_data: dict[str, Any]) -> None:
+    from datetime import datetime
+
+    assert Chunk.model_validate({**chunk_data, "effective_date": date(2001, 1, 1)})
+    with pytest.raises(ValidationError):
+        Chunk.model_validate({**chunk_data, "effective_date": datetime(2001, 1, 1)})
+
+
+def test_immutable_sequences() -> None:
+    corpus = load_corpus(FIXTURE)
+    answer = Answer.model_validate(
+        dict(
+            request_id="test",
+            outcome="not_found",
+            answer_text="",
+            citations=[],
+            confidence=None,
+            conflicts_noted=["Test"],
+            disclaimer="",
+        )
+    )
+    for sequence in (
+        corpus.chunks,
+        corpus.chunks[0].heading_path,
+        corpus.manifest.ocr_fallbacks,
+        answer.citations,
+        answer.conflicts_noted,
+    ):
+        assert isinstance(sequence, tuple)
+        with pytest.raises(AttributeError):
+            sequence.append("bad")  # pyright: ignore[reportAttributeAccessIssue]
+    assert isinstance(json.loads(answer.model_dump_json())["citations"], list)
+
+
+def test_fixture_history() -> None:
+    corpus = load_corpus(FIXTURE)
+    blog, declaration = corpus.chunks[-2:]
+    assert blog.authority == Authority.informal
+    assert blog.published_date == date(2022, 10, 20)
+    assert blog.text_clean == (
+        "2nd offense - $50.00 fine, 3rd offense - $100.00, "
+        "4th and subsequent offense - $50.00 per day"
+    )
+    assert declaration.authority == Authority.governing
+    assert "($326.00) per Unit" in declaration.text_clean
+    assert declaration.source_url.endswith(".pdf?ver=1749305476488")
+    assert corpus.chunks[4].text_clean.endswith("Motion approved.")
+    assert (
+        corpus.chunks[5].text_clean
+        == "2026 Assessment Prices: $452 year or $113 per quarter"
+    )
+    assert all(chunk.text_clean == chunk.text_raw for chunk in corpus.chunks)
+
+
+def test_empty_query_delimiter(chunk_data: dict[str, Any]) -> None:
+    chunk = Chunk.model_validate(
+        {**chunk_data, "source_url": "https://example.org/a.pdf?"}
+    )
+    assert citation_url(chunk) == "https://example.org/a.pdf#page=2"

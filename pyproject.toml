@@ -14,7 +14,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["ruff", "pyright", "pytest", "pre-commit"]
+dev = [
+    "ruff",
+    "pyright",
+    "pytest",
+    "pre-commit",
+    "pyyaml>=6.0.3",
+]
 
 [tool.ruff]
 target-version = "py312"

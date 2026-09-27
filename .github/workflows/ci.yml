@@ -5,14 +5,17 @@ on:
     branches: [main]
 permissions:
   contents: read
+env:
+  UV_LOCKED: "1"
 jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@6b9c6063abd6010835644d4c2e1bef4cf5cd0fca # v6.0.1
         with:
           python-version: '3.12'
           enable-cache: true
@@ -21,6 +24,14 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run pyright
       - run: uv run pytest -q
-      - uses: gitleaks/gitleaks-action@v2
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
+          GITLEAKS_ENABLE_COMMENTS: "false"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
