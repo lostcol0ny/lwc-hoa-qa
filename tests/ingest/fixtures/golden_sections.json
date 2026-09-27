@@ -1,0 +1,24 @@
+{
+ "declaration": [
+  ["declaration-8.1", "Declaration, Article 8, §8.1, p. 21"],
+  ["declaration-8.2", "Declaration, Article 8, §8.2, p. 22"],
+  ["declaration-8.3", "Declaration, Article 8, §8.3, p. 22"],
+  ["declaration-8.4", "Declaration, Article 8, §8.4, p. 23"],
+  ["declaration-8.5", "Declaration, Article 8, §8.5, p. 24"],
+  ["declaration-8.6", "Declaration, Article 8, §8.6, p. 26"],
+  ["declaration-8.7", "Declaration, Article 8, §8.7, p. 26"],
+  ["declaration-8.8", "Declaration, Article 8, §8.8, p. 26"],
+  ["declaration-8.9", "Declaration, Article 8, §8.9, p. 27"],
+  ["declaration-8.10", "Declaration, Article 8, §8.10, p. 28"],
+  ["declaration-8.11", "Declaration, Article 8, §8.11, p. 30"],
+  ["declaration-8.12", "Declaration, Article 8, §8.12, p. 31"],
+  ["declaration-8.13", "Declaration, Article 8, §8.13, p. 32"],
+  ["declaration-9.1", "Declaration, Article 9, §9.1, p. 32"]
+ ],
+ "rules-2023": [
+  ["rules-2023-3.A", "Rules 2023, Section 3.A (Intent), PDF p. 8"],
+  ["rules-2023-3.B", "Rules 2023, Section 3.B (Fines), PDF p. 9"],
+  ["rules-2023-3.C", "Rules 2023, Section 3.C (Notice and Hearing Procedure), PDF p. 9"],
+  ["rules-2023-3.D", "Rules 2023, Section 3.D (Remedies), PDF p. 11"]
+ ]
+}

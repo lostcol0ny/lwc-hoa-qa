@@ -21,12 +21,21 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+# Corpus build only (python -m hoa_qa.ingest). Kept out of [project] dependencies
+# so the Vercel runtime never installs them: PyMuPDF is AGPL-licensed and large.
+ingest = [
+    "beautifulsoup4>=4.15.0,<5",
+    "pymupdf>=1.28.2,<2",
+    "pyyaml>=6.0.3,<7",
+]
+# dev includes ingest so the default `uv sync --locked` (CI) tests and type-checks
+# the ingest package; `--no-dev` installs (and the Vercel runtime) never get it.
 dev = [
+    { include-group = "ingest" },
     "ruff",
     "pyright",
     "pytest",
     "pre-commit",
-    "pyyaml>=6.0.3",
 ]
 
 [tool.ruff]
