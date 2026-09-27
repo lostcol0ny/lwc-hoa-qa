@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from hoa_qa.budget import (
     BudgetStore,
     CounterStore,
+    Reservation,
     select_budget_store,
     select_counter_store,
 )
@@ -41,7 +42,7 @@ from hoa_qa.web.deps import (
     load_corpus_once,
 )
 from hoa_qa.web.ratelimit import RateLimiter, client_ip
-from hoa_qa.web.security import SecurityHeadersMiddleware, is_cross_origin
+from hoa_qa.web.security import SecurityHeadersMiddleware, origin_allowed
 from hoa_qa.web.settings import (
     DISCLAIMER,
     REPO_ROOT,
@@ -170,7 +171,7 @@ def create_app(
         limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
         asker: Annotated[Asker, Depends(get_asker)],
     ) -> JSONResponse:
-        if is_cross_origin(request.headers.get("origin"), request.headers.get("host")):
+        if not origin_allowed(request, on_vercel=settings.on_vercel):
             return answer_response(
                 web_answer(Outcome.error, "Cross-origin requests aren't allowed."),
                 status_code=403,
@@ -187,13 +188,22 @@ def create_app(
                 status_code=429,
             )
 
+        # Hold the worst-case cost before spending anything. Any failure to
+        # reserve (over budget, or the store erroring) refuses the question.
+        request_id = uuid.uuid4().hex
+        reserve_usd = reservation_amount(settings, asker)
         try:
-            spend = await budget_store.get_month_spend()
+            reservation = await budget_store.reserve(
+                reserve_usd, settings.monthly_budget_usd
+            )
         except Exception as exc:
-            # Fail closed: without a trustworthy counter there's no cap.
-            logger.error("budget store unavailable error_type=%s", type(exc).__name__)
-            spend = math.inf
-        if spend >= settings.monthly_budget_usd:
+            logger.error(
+                "budget reservation failed request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            reservation = None
+        if reservation is None:
             answer = budget_exhausted_answer(settings.documents_url)
             logger.info(
                 "ask outcome=%s request_id=%s", answer.outcome, answer.request_id
@@ -201,17 +211,22 @@ def create_app(
             return answer_response(answer)
 
         started = time.perf_counter()
-        request_id = uuid.uuid4().hex
         try:
             result = await asker(body.question)
             answer = result.answer
-            cost = float(result.estimated_cost_usd)
         except Exception as exc:
             # Exception messages can quote the question; log the type only.
             logger.error(
                 "asker failed request_id=%s error_type=%s",
                 request_id,
                 type(exc).__name__,
+            )
+            # An asker may attach the cost it incurred before failing.
+            await _reconcile(
+                budget_store,
+                reservation,
+                getattr(exc, "estimated_cost_usd", None),
+                request_id,
             )
             return answer_response(
                 web_answer(
@@ -222,7 +237,9 @@ def create_app(
             )
 
         latency_ms = round((time.perf_counter() - started) * 1000)
-        await _record_spend(budget_store, cost, answer.request_id)
+        cost = await _reconcile(
+            budget_store, reservation, result.estimated_cost_usd, answer.request_id
+        )
         logger.info(
             "ask outcome=%s request_id=%s latency_ms=%d cost_usd=%.6f",
             answer.outcome,
@@ -261,18 +278,58 @@ def create_app(
     return app
 
 
-async def _record_spend(budget: BudgetStore, cost: float, request_id: str) -> None:
-    if not math.isfinite(cost) or cost < 0:
-        logger.error("invalid estimated cost request_id=%s", request_id)
-        return
+def reservation_amount(settings: WebSettings, asker: object) -> float:
+    """R = max(BUDGET_RESERVE_PER_REQUEST_USD, the asker's ``max_cost_usd``)."""
+    reserve = settings.budget_reserve_per_request_usd
+    declared = getattr(asker, "max_cost_usd", None)
+    if declared is None:
+        return reserve
     try:
-        await budget.add_spend(cost)
+        declared = float(declared)
+    except (TypeError, ValueError):
+        declared = math.nan
+    if not math.isfinite(declared) or declared < 0:
+        logger.warning("ignoring invalid asker max_cost_usd")
+        return reserve
+    return max(reserve, declared)
+
+
+async def _reconcile(
+    budget: BudgetStore,
+    reservation: Reservation,
+    reported_cost: object,
+    request_id: str,
+) -> float:
+    """Swap the reservation for the reported cost; return the cost now counted.
+
+    With no usable cost, or if the store write fails, the full reservation
+    stays counted: accounting errors over-count, never under-count. There is
+    no retry, so a failing store can't hold the request open.
+    """
+    held = reservation.amount_usd
+    try:
+        cost = float(reported_cost)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        cost = math.nan
+    if not math.isfinite(cost) or cost < 0:
+        logger.error("no usable cost; keeping reservation request_id=%s", request_id)
+        return held
+    if cost > held:
+        logger.warning(
+            "cost exceeded reservation request_id=%s excess_usd=%.6f",
+            request_id,
+            cost - held,
+        )
+    try:
+        await budget.reconcile(reservation, cost)
     except Exception as exc:
         logger.error(
-            "failed to record spend request_id=%s error_type=%s",
+            "reconcile failed; keeping reservation request_id=%s error_type=%s",
             request_id,
             type(exc).__name__,
         )
+        return held
+    return cost
 
 
 app = create_app()
