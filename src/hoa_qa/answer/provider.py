@@ -67,20 +67,34 @@ _CITATION_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# Structured-output JSON schema. Numeric bounds and array/string length caps
-# are enforced by AnswerDraft, since output schemas do not accept them all.
+# Structured-output JSON schema. Structured outputs do not support numeric
+# bounds or string/array length keywords (maxLength, maxItems, ...; the SDKs
+# strip them into descriptions), so the caps are stated in descriptions from
+# the same constants and enforced locally by AnswerDraft.
+STATEMENT_DESCRIPTION = (
+    f"One atomic fact, at most {MAX_STATEMENT_CHARS} characters. Split compound "
+    "statements into separate claims."
+)
 ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "claims": {
             "type": "array",
+            "description": f"At most {MAX_CLAIMS} claims.",
             "items": {
                 "type": "object",
                 "properties": {
-                    "statement": {"type": "string"},
+                    "statement": {
+                        "type": "string",
+                        "description": STATEMENT_DESCRIPTION,
+                    },
                     "kind": {"type": "string", "enum": ["answer", "conflict"]},
                     "essential": {"type": "boolean"},
-                    "citations": {"type": "array", "items": _CITATION_SCHEMA},
+                    "citations": {
+                        "type": "array",
+                        "description": f"1 to {MAX_CITATIONS_PER_CLAIM} citations.",
+                        "items": _CITATION_SCHEMA,
+                    },
                 },
                 "required": ["statement", "kind", "essential", "citations"],
                 "additionalProperties": False,
@@ -95,6 +109,20 @@ ANSWER_SCHEMA: dict[str, Any] = {
 
 
 @dataclass(frozen=True)
+class DraftIssue:
+    """Why an invalid draft was rejected, without any of its text.
+
+    ``index`` is the 0-based claim position (None: the output as a whole) and
+    ``code`` a key of prompt.REJECTION_REASONS. A retry prompt tells the model
+    about these, so both are bounded: ``index`` < MAX_CLAIMS, and
+    ``draft_issues`` returns at most MAX_CLAIMS of them.
+    """
+
+    index: int | None
+    code: str
+
+
+@dataclass(frozen=True)
 class ProviderResult:
     """``draft`` is None when the output was missing or failed validation.
 
@@ -102,6 +130,7 @@ class ProviderResult:
     one: field paths and error types only, never output text.
     ``claims_trimmed`` is True when salvage dropped a (non-essential) claim,
     so the answer must carry OMITTED_NOTE like any other dropped claim.
+    ``issues`` says, per claim, why a missing draft was invalid.
     """
 
     draft: AnswerDraft | None
@@ -110,6 +139,7 @@ class ProviderResult:
     output_tokens: int
     note: str | None = None
     claims_trimmed: bool = False
+    issues: tuple[DraftIssue, ...] = ()
 
 
 class AnswerProvider(Protocol):
@@ -133,6 +163,7 @@ class ParsedDraft:
     draft: AnswerDraft | None
     note: str | None = None
     claims_trimmed: bool = False
+    issues: tuple[DraftIssue, ...] = ()
 
 
 def parse_draft_noted(text: str) -> tuple[AnswerDraft | None, str | None]:
@@ -152,12 +183,38 @@ def parse_draft_checked(text: str) -> ParsedDraft:
     try:
         return ParsedDraft(AnswerDraft.model_validate_json(text))
     except ValidationError as exc:
-        reason = _describe(exc)
+        error = exc
+    reason = _describe(error)
     salvaged = _salvage(text)
     if salvaged is None:
-        return ParsedDraft(None, f"invalid: {reason}")
+        return ParsedDraft(None, f"invalid: {reason}", issues=draft_issues(error))
     draft, dropped = salvaged
     return ParsedDraft(draft, f"salvaged: {reason}", claims_trimmed=dropped > 0)
+
+
+def draft_issues(exc: ValidationError) -> tuple[DraftIssue, ...]:
+    """Per-claim issue codes for an invalid draft; never the offending values.
+
+    Claims past MAX_CLAIMS are reported once as "too_many_claims", so the
+    result is bounded (it feeds the retry prompt, and so max_cost_usd).
+    """
+    found: set[DraftIssue] = set()
+    for error in exc.errors():
+        loc = error["loc"]
+        if loc[:1] != ("claims",):
+            found.add(DraftIssue(None, "malformed"))
+        elif len(loc) == 1:
+            code = "too_many_claims" if error["type"] == "too_long" else "malformed"
+            found.add(DraftIssue(None, code))
+        elif not isinstance(loc[1], int) or loc[1] >= MAX_CLAIMS:
+            found.add(DraftIssue(None, "too_many_claims"))
+        elif loc[2:] == ("statement",) and error["type"] == "string_too_long":
+            found.add(DraftIssue(loc[1], "too_long"))
+        else:
+            found.add(DraftIssue(loc[1], "malformed"))
+    # Whole-output issues first, then by claim.
+    ordered = sorted(found, key=lambda i: (i.index is not None, i.index or 0, i.code))
+    return tuple(ordered[:MAX_CLAIMS])
 
 
 def _describe(exc: ValidationError) -> str:
@@ -235,7 +292,12 @@ class AnthropicAnswerProvider:
             messages=[{"role": "user", "content": prompt.user}],
             output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
         )
-        parsed = ParsedDraft(None, f"invalid: stop={response.stop_reason}")
+        code = "truncated" if response.stop_reason == "max_tokens" else "malformed"
+        parsed = ParsedDraft(
+            None,
+            f"invalid: stop={response.stop_reason}",
+            issues=(DraftIssue(None, code),),
+        )
         if response.stop_reason == "end_turn":
             text = "".join(b.text for b in response.content if b.type == "text")
             parsed = parse_draft_checked(text)
@@ -253,6 +315,7 @@ class AnthropicAnswerProvider:
             output_tokens=response.usage.output_tokens,
             note=note,
             claims_trimmed=parsed.claims_trimmed,
+            issues=parsed.issues,
         )
 
     async def aclose(self) -> None:

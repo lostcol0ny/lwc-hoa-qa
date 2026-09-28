@@ -7,7 +7,12 @@ from hoa_qa.answer.prompt import (
     MAX_CLAIMS,
     MAX_STATEMENT_CHARS,
 )
-from hoa_qa.answer.provider import parse_draft, parse_draft_checked, parse_draft_noted
+from hoa_qa.answer.provider import (
+    DraftIssue,
+    parse_draft,
+    parse_draft_checked,
+    parse_draft_noted,
+)
 
 
 def claim(statement: str = "Fact.", *, essential: bool = True, cites: int = 1) -> dict:
@@ -71,3 +76,30 @@ def test_salvage_reports_dropped_claims_but_not_trimmed_citations() -> None:
     dropped = parse_draft_checked(output(claim(), long))
     assert dropped.draft is not None and dropped.claims_trimmed
     assert not parse_draft_checked(output(claim())).claims_trimmed
+
+
+def test_overlong_essential_claim_is_reported_by_index_without_text() -> None:
+    long = claim("secret " * 100, essential=True)
+    parsed = parse_draft_checked(output(claim(), long))
+    assert parsed.draft is None
+    assert parsed.issues == (DraftIssue(1, "too_long"),)
+    assert "secret" not in repr(parsed.issues)
+
+
+def test_draft_issues_are_bounded() -> None:
+    # Every claim over the cap, and more claims than allowed: one issue per
+    # in-range claim plus a single whole-output issue, never more than
+    # MAX_CLAIMS in all (they feed the retry prompt, and so max_cost_usd).
+    many = [claim("x" * (MAX_STATEMENT_CHARS + 1)) for _ in range(MAX_CLAIMS * 3)]
+    parsed = parse_draft_checked(output(*many))
+    assert parsed.draft is None
+    assert 0 < len(parsed.issues) <= MAX_CLAIMS
+    assert parsed.issues[0] == DraftIssue(None, "too_many_claims")
+    assert all(i.index is None or i.index < MAX_CLAIMS for i in parsed.issues)
+    assert parse_draft_checked("{not json").issues == (DraftIssue(None, "malformed"),)
+
+
+def test_malformed_claim_is_reported_by_index() -> None:
+    bad = {**claim(), "kind": "opinion"}
+    parsed = parse_draft_checked(output(claim(), claim(), bad))
+    assert parsed.issues == (DraftIssue(2, "malformed"),)

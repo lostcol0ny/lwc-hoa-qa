@@ -16,6 +16,7 @@ from hoa_qa.answer.provider import (
     AnswerDraft,
     DraftCitation,
     DraftClaim,
+    DraftIssue,
     ProviderResult,
 )
 from hoa_qa.ask import QAAsker, QASettings, build_asker
@@ -107,6 +108,8 @@ class FakeProvider:
     output_tokens: list[int] = field(default_factory=list)
     # Per call: whether salvage dropped claims (ProviderResult.claims_trimmed).
     trimmed: list[bool] = field(default_factory=list)
+    # Per call: why an invalid (None) draft was invalid (ProviderResult.issues).
+    issues: list[tuple[DraftIssue, ...]] = field(default_factory=list)
 
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
         self.prompts.append(prompt)
@@ -116,8 +119,14 @@ class FakeProvider:
         self.output_tokens.append(tokens_out)
         call = len(self.prompts) - 1
         trimmed = self.trimmed[call] if call < len(self.trimmed) else False
+        issues = self.issues[call] if call < len(self.issues) else ()
         return ProviderResult(
-            draft, self.model, tokens_in, tokens_out, claims_trimmed=trimmed
+            draft,
+            self.model,
+            tokens_in,
+            tokens_out,
+            claims_trimmed=trimmed,
+            issues=issues,
         )
 
     def bill(self, prompt: AnswerPrompt, draft: AnswerDraft | None) -> tuple[int, int]:

@@ -1,6 +1,17 @@
 """The answer prompt carries §3.2 policy, passage metadata, and data delimiters."""
 
-from hoa_qa.answer.prompt import SYSTEM_PROMPT, build_prompt, defang
+import json
+
+from hoa_qa.answer.prompt import (
+    MAX_CLAIMS,
+    MAX_STATEMENT_CHARS,
+    REJECTION_REASONS,
+    SYSTEM_PROMPT,
+    build_prompt,
+    defang,
+    rejected,
+)
+from hoa_qa.answer.provider import ANSWER_SCHEMA, DraftClaim
 from hoa_qa.models import Corpus
 
 
@@ -93,3 +104,50 @@ def test_system_prompt_points_decision_questions_at_minutes() -> None:
 
     assert "whether a vote, meeting action, or decision took place" in SYSTEM_PROMPT
     assert "answer from the minutes" in SYSTEM_PROMPT
+
+
+def test_statement_limit_is_stated_up_front_from_one_constant() -> None:
+    system = " ".join(SYSTEM_PROMPT.split())
+    assert f"at most {MAX_STATEMENT_CHARS} characters, a hard limit" in system
+    assert "one atomic fact per claim" in system.lower()
+    assert "split a compound statement" in system
+    statement = ANSWER_SCHEMA["properties"]["claims"]["items"]["properties"][
+        "statement"
+    ]
+    assert str(MAX_STATEMENT_CHARS) in statement["description"]
+    # Structured outputs do not support length keywords; enforced locally.
+    assert "maxLength" not in json.dumps(ANSWER_SCHEMA)
+    assert DraftClaim.model_fields["statement"].metadata[-1].max_length == (
+        MAX_STATEMENT_CHARS
+    )
+
+
+def test_retry_entries_name_the_claim_and_a_code_written_reason(
+    corpus: Corpus,
+) -> None:
+    assert rejected("Dues are $0.", "unsupported", 2) == (
+        "claim 2: Dues are $0. (the cited passages do not state all of it)"
+    )
+    too_long = rejected("", "too_long", 3)
+    assert too_long.startswith("claim 3: its statement was over the 400-character")
+    assert "split it" in too_long
+    assert rejected("", "truncated").startswith("the output: the output was cut off")
+    user = build_prompt(
+        "q", corpus.chunks[:1], failed_claims=[too_long], invalid_output=True
+    ).user
+    assert "not valid" in user
+    block = user[user.index("<rejected_claims>") :]
+    assert f"- {too_long}" in block
+    # Every retry repeats the length rule, since fixes tend to merge claims.
+    assert f"at most {MAX_STATEMENT_CHARS} characters: split, don't merge" in user
+
+
+def test_issue_entries_never_outgrow_the_bounded_worst_entry() -> None:
+    """max_cost_usd sizes the retry with MAX_CLAIMS worst verification entries;
+    an invalid draft's issue entries (at most MAX_CLAIMS) must be no longer."""
+    longest = max(REJECTION_REASONS, key=lambda r: len(REJECTION_REASONS[r]))
+    worst = rejected("\U0001d538" * MAX_STATEMENT_CHARS, longest, MAX_CLAIMS)
+    for code in REJECTION_REASONS:
+        for index in (None, MAX_CLAIMS):
+            entry = rejected("", code, index)
+            assert len(entry.encode()) < len(worst.encode())
