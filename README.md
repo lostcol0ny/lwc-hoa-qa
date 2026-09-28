@@ -213,10 +213,15 @@ Do these in order.
    `vercel link`).
 8. Configure the Vercel Firewall rate-limit rule for `/api/ask`
    ([docs/web-ops.md](docs/web-ops.md#vercel-firewall-rule-edge-layer)).
-9. Deploy (push to `main`, or re-run **Deploy**) and verify `/api/health`
+9. Enable Web Analytics in the Vercel project dashboard (Analytics tab → Enable),
+   then redeploy. Analytics is a no-op until enabled. Hobby includes 50,000
+   events/month across the team; collection pauses at the limit until the next
+   billing cycle (or an upgrade). See [analytics operations](docs/web-ops.md#web-analytics)
+   and [Vercel pricing](https://vercel.com/docs/analytics/limits-and-pricing).
+10. Deploy (push to `main`, or re-run **Deploy**) and verify `/api/health`
    returns `"status": "ok"`, the expected `chunk_count`, and
    `"budget_config": "ok"`. Ask one question on the live page.
-10. In GitHub settings → Emails, enable **Block command line pushes that expose
+11. In GitHub settings → Emails, enable **Block command line pushes that expose
     my email**.
 
 ### Day-2 operations

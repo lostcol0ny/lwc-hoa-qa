@@ -8,6 +8,8 @@
   <title>Lakewood Creek HOA Q&amp;A</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
+  <script src="/analytics.js" defer></script>
+  <script src="/_vercel/insights/script.js" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -22,7 +24,7 @@
   </header>
 
   <main>
-    <form id="ask-form" class="ask-form" novalidate>
+    <form method="post" action="/api/ask" id="ask-form" class="ask-form" novalidate>
       <label for="question" class="visually-hidden">Your question</label>
       <div id="composer" class="composer">
         <span class="beam" aria-hidden="true"></span>

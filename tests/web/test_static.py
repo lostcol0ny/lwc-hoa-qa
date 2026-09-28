@@ -28,9 +28,14 @@ def test_app_js_checks_https_before_href() -> None:
 
 def test_page_has_no_inline_or_external_scripts_or_styles() -> None:
     html = (PUBLIC / "index.html").read_text()
-    assert re.findall(r"<script[^>]*>", html) == ['<script src="/app.js" defer>']
+    scripts = [
+        '<script src="/app.js" defer>',
+        '<script src="/analytics.js" defer>',
+        '<script src="/_vercel/insights/script.js" defer>',
+    ]
+    assert re.findall(r"<script[^>]*>", html) == scripts
     assert re.findall(r"<script[^>]*>\s*</script>", html) == [
-        '<script src="/app.js" defer></script>'
+        script + "</script>" for script in scripts
     ]
     assert "<style" not in html
     assert not re.search(r"\sstyle\s*=", html)
@@ -92,3 +97,26 @@ def test_progress_lines_are_visual_only_and_respect_reduced_motion() -> None:
     css = (PUBLIC / "styles.css").read_text()
     reduced = css[css.index("@media (prefers-reduced-motion: reduce)") :]
     assert re.search(r"\.progress-line\s*\{\s*animation:\s*none", reduced)
+
+
+def test_questions_never_enter_page_urls() -> None:
+    html = (PUBLIC / "index.html").read_text()
+    # Native submission must not serialize question text into a query either.
+    assert '<form method="post" action="/api/ask"' in html
+    source = (PUBLIC / "app.js").read_text()
+    assert 'fetch("/api/ask", {' in source
+    assert 'method: "POST"' in source
+    assert "body: JSON.stringify({ question: question })" in source
+    assert re.search(
+        r'form.addEventListener\("submit", function \(event\) \{'
+        r"\s*event.preventDefault\(\);",
+        source,
+    )
+    for api in ("location", "history", "URLSearchParams", "window.va", "sendBeacon"):
+        assert not re.search(r"\b" + re.escape(api) + r"\b", source)
+
+
+def test_local_analytics_script_missing_does_not_affect_assets(harness) -> None:
+    assert harness.client.get("/_vercel/insights/script.js").status_code == 404
+    for path in ("/", "/app.js", "/analytics.js"):
+        assert harness.client.get(path).status_code == 200

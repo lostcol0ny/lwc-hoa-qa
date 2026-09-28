@@ -293,6 +293,41 @@ Logs contain the request ID, outcome, latency, estimated cost, and exception
 *type*. They never contain question text, answer text, exception messages, or
 IP addresses.
 
+## Web Analytics
+
+Vercel Web Analytics collects cookieless pageviews: page URL, referrer, filtered
+query parameters, time, approximate geography, and browser/device information
+for aggregate traffic statistics. No custom events are sent. Questions stay
+in the JSON POST body, never the location, query, or hash; answers stay in the
+page DOM. Analytics receives neither question nor answer text. The existing
+notice about third-party AI processing remains accurate.
+
+Checked against live docs on 2026-09-27:
+
+- [HTML quickstart](https://vercel.com/docs/analytics/quickstart) shows the
+  `window.va` queue initializer and a deferred script. We put the initializer
+  in `public/analytics.js` before the insights script to avoid inline JS.
+  The current example uses `/<unique-path>/script.js`; the enablement section
+  still lists `/_vercel/insights/*`. This no-build frontend uses the established
+  `/_vercel/insights/script.js` route, also shown in
+  [Vercel's HTML template](https://vercel.com/templates/other/ratzilla).
+  Randomized Resilient Intake requires version 2 of the package per the
+  [privacy docs](https://vercel.com/docs/analytics/privacy-policy); no npm or
+  Next.js dependency is needed here.
+- The [privacy docs](https://vercel.com/docs/analytics/privacy-policy) describe
+  aggregate data and request-derived visitor hashes discarded after 24 hours.
+- Enable Web Analytics in the Vercel project dashboard (Analytics tab → Enable),
+  then redeploy through the existing Deploy workflow. Until enabled, analytics
+  is a no-op. [Hobby pricing](https://vercel.com/docs/analytics/limits-and-pricing)
+  includes 50,000 events/month across the team, with no paid overage: collection
+  pauses until the next billing cycle or an upgrade.
+- Both the script and pageview intake are same-origin. CSP is unchanged:
+  `script-src 'self'` and `connect-src 'self'`; no extra origins or inline code.
+- Outside Vercel, `/_vercel/insights/script.js` returns 404. The deferred script
+  is independent of `app.js` (which runs first); analytics failure doesn't
+  prevent asking questions. After deployment, verify the script loads and
+  pageview requests appear in the Network panel and Analytics dashboard.
+
 ## Vercel project setup
 
 Checked against the live Vercel docs
