@@ -17,12 +17,12 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 |---|---|---|---|
 | 1. Validate | `ask.clean_question` | Drop control (`Cc`) and format (`Cf`, e.g. zero-width, bidi) characters, collapse whitespace, then require 1–500 characters. No model calls. | `invalid_input` |
 | 2. Gate | `retrieval/gate.py` | One Jev `Noul`: is `message` a question a resident might ask their HOA (its rules, fees, governance, amenities, or anything about a home, yard, or life in the neighborhood that HOA rules could cover)? The criteria list examples (decorations, antennas, fences, sheds, trash cans, parking, pets, neighbor issues as HOA matters). The gate only keeps out abuse and off-topic use (poems, homework, chat, bare instructions); whether the documents answer is the sweep's job. The question is sent as state (data), never inside the instructions. | `refused_off_topic`, with a link to the documents; the answer model is never called |
-| 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does the passage `passages.p3` (heading: …) help answer the question?"; a passage that answers part of it counts), batched **per `doc_id`, at most 8 passages per request**. Passages are keyed by name, not list position, and each question repeats its passage's heading: with positional references (`passages[30]`) in long lists the judge scored neighbors instead of the passage asked about. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` ("couldn't find it; contact the Board") with no free-form answer |
-| 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, quote}`. The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. | `not_found` if the model returns no claims |
+| 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does the passage `passages.p3` (heading: …) help answer the question?"; a passage that answers part of it counts), batched **per `doc_id`, at most 8 passages per request**. Passages are keyed by name, not list position, and each question repeats its passage's heading: with positional references (`passages[30]`) in long lists the judge scored neighbors instead of the passage asked about. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` (`reason: no_relevant_passages`; "couldn't find it; contact the Board") with no free-form answer |
+| 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, quote}`. The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. Structured outputs don't support length keywords (`maxLength`, `maxItems`), so the caps are stated in the schema's `description`s and in the prompt ("one atomic fact per claim; split compound statements"), built from the same constants, and enforced locally. | `not_found` (`reason: no_answer_in_passages`) if the model returns no claims |
 | 5a. Quote check | `verify/quotes.py` | Per citation: the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, curly quotes, ellipses (`…` = `...`) and dashes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
 | 5a′. Authority rule | `ask.py` | See [Source authority](#source-authority-support-is-not-authority). An `answer` claim may only rest on citations outside `informal`/`superseded` when a `statute`/`governing`/`rules`/`board_decision` passage was provided. Statute-backed claims that give advice fail as `advice_phrasing`. | |
 | 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Each passage carries its `source` (citation label), `authority` and `effective_date` from the corpus next to its `text`, so attributions ("under the 2023 Rules") can be judged. Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
-| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims, each with a code-written reason (quote not found, not fully supported, informal-only, informal-as-current), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. If a claim broke the authority rule, the retry also says so. Then apply the drop rule below. | `not_found` |
+| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims by number (`claim 2: <statement> (<reason>)`), each with a code-written reason (quote not found, not fully supported, informal-only, informal-as-current, advice phrasing), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. For an invalid draft the entries are code-written only, by claim number, never the draft's text (`claim 2: its statement was over the 400-character limit; split it ...`, or output-level: cut off, too many claims, malformed); at most 8, so `max_cost_usd` still bounds the retry prompt. If a claim broke the authority rule, the retry also says so, and every retry restates the length rule. Then apply the drop rule below. | `not_found` (`reason: unverified`) |
 | 6. Respond | `ask.py` | Compose the `Answer` from verified claims only (see below): `Citation.url = citation_url(chunk)`, the §5 disclaimer, and a uuid4 `request_id`. | `answered` |
 
 ### How the answer text is built, and the claim-drop rule
@@ -33,6 +33,15 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
   text that reaches the user without verification.
 - `conflicts_noted` is the verified `conflict` claims' statements.
 - `citations` is the verified claims' quote-checked citations, deduplicated.
+- `reason` (added later; `null` except on `not_found`) says why nothing was
+  answered, without changing the `outcome` enum: `no_relevant_passages`
+  (the sweep kept nothing), `no_answer_in_passages` (the model returned no
+  claims), or `unverified` (passages were found but no answer passed
+  verification, or the output was unusable). An `unverified` answer says so
+  ("I found related passages but couldn't verify a precise answer. Try
+  rephrasing, or see: ...") and lists up to 5 `related_documents`
+  (`{title, url}`): whole documents the model cited, then the other
+  retrieved ones. Only titles and document URLs, never passage or claim text.
 - **Drop rule** (after the one regenerate):
   - If any **essential** `answer` claim still fails, the result is `not_found`.
   - If no `answer` claim survives, the result is `not_found`.
@@ -287,18 +296,24 @@ maximum-length question, at output caps of 1024, 2048 and 4096.
 
 | Corpus | 4096 | **2048 (default)** | 1024 |
 |---|---|---|---|
-| `tests/fixtures/mini_corpus.json` (8 chunks) | $0.09794 | **$0.07746** | $0.06722 |
-| Synthetic ~74K-token corpus (240 chunks) | $0.13250 | **$0.11202** | $0.10178 |
-| Real corpus, HOA documents only (360 chunks) | $0.20903 | **$0.18855** | $0.17831 |
-| Real corpus with Illinois statutes (668 chunks) | $0.26551 | **$0.24503** | $0.23479 |
+| `tests/fixtures/mini_corpus.json` (8 chunks) | $0.10023 | **$0.07975** | $0.06951 |
+| Synthetic ~74K-token corpus (240 chunks) | $0.13479 | **$0.11431** | $0.10407 |
+| Real corpus, HOA documents only (360 chunks) | $0.21132 | **$0.19084** | $0.18060 |
+| Real corpus with Illinois statutes (668 chunks) | $0.26780 | **$0.24732** | $0.23708 |
+
+The answer-input term depends on the prompt and schema text, which are the
+same for every corpus. The retry feedback and length rules added with the
+not-found recovery change (and an earlier prompt change) raised every row by
+the same $0.00229. The mini and synthetic rows are measured. The real-corpus
+rows are the 2026-09-27 figures plus that constant.
 
 At 2048, the bound breaks down like this:
 
 | Corpus | Jev | Answer input | Answer output |
 |---|---|---|---|
-| Mini | $0.00339 (80,602 tokens) | $0.05360 (2 × 26,798 tokens) | $0.02048 |
-| Synthetic ~74K | $0.03544 (843,886 tokens) | $0.05610 (2 × 28,049 tokens) | $0.02048 |
-| Real with statutes | $0.12182 (2,900,567 tokens) | $0.10272 (2 × 51,362 tokens) | $0.02048 |
+| Mini | $0.00339 (80,602 tokens) | $0.05588 (2 × 27,940 tokens) | $0.02048 |
+| Synthetic ~74K | $0.03544 (843,886 tokens) | $0.05838 (2 × 29,191 tokens) | $0.02048 |
+| Real with statutes | $0.12182 (2,900,567 tokens) | $0.10501 (2 × 52,504 tokens) | $0.02048 |
 
 On the small corpora the largest term is the worst-case answer prompt, where
 the question and eight rejected statements are counted at 4 bytes per
@@ -311,9 +326,24 @@ figures were computed on 2026-09-27 from a `--no-llm` build.
 `hoa_qa.ask` logs one structured line per request (also attached as
 `record.hoa_qa`): `request_id`, `outcome`, `latency_ms`, `jev_input_tokens`,
 `answer_model`, `answer_calls`, `answer_input_tokens`, `answer_output_tokens`,
-`citations`, `estimated_cost_usd`, and `notes` (`invalid_draft`, `no_claims`,
-`claims_failed=N`). It **never logs question, answer, or claim text**
-(spec §6), and tests assert this.
+`citations`, `estimated_cost_usd`, `notes` (`invalid_draft`, `no_claims`,
+`claims_failed=N`, `used_first_attempt`), and `reason`.
+
+Two diagnostics records explain a `not_found`:
+
+- `ask sweep` (`record.hoa_qa_sweep`): the selected chunk IDs and scores.
+- `ask attempt` (`record.hoa_qa_attempt`), one per answer-model call:
+  `attempt`, `terminal` (`verified`, `claims_failed`, `invalid_draft`,
+  `no_claims`), `fallback_eligible` (the drop rule would let it stand),
+  the provider's parse `note` (schema field paths and Pydantic error types;
+  a key the model wrote, such as an extra field, becomes `<extra>`), an invalid
+  draft's `issues` (claim number and code), and per claim: `index`, `kind`,
+  `essential`, rejection `reason`, `support` score, cited `chunk_ids`, and
+  `statement_chars`. A cited `chunk_id` that names no provided passage is
+  logged as `?`, since the model writes that field.
+
+None of these logs question, answer, claim, or quote text (spec §6), and
+tests assert this.
 
 Do **not** set `TYPESAFE_LOG_LEVEL=debug` or `ANTHROPIC_LOG=debug` in
 production. At debug level both SDKs log request bodies, which contain the

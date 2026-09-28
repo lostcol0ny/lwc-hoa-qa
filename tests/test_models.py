@@ -15,6 +15,7 @@ from hoa_qa.models import (
     Citation,
     CorpusManifest,
     Outcome,
+    OutcomeReason,
     authority_rank,
     citation_url,
     load_corpus,
@@ -398,4 +399,40 @@ def test_self_supersession(chunk_data: dict[str, Any]) -> None:
                 "authority": "superseded",
                 "superseded_by": chunk_data["doc_id"],
             }
+        )
+
+
+def test_answer_reason_is_optional_and_backward_compatible() -> None:
+    legacy = {
+        "request_id": "r",
+        "outcome": "not_found",
+        "answer_text": "",
+        "citations": [],
+        "confidence": None,
+        "conflicts_noted": [],
+        "disclaimer": "",
+    }
+    old = Answer.model_validate(legacy)
+    assert old.reason is None and old.related_documents == ()
+    new = Answer.model_validate(
+        {
+            **legacy,
+            "reason": "unverified",
+            "related_documents": [{"title": "Bylaws", "url": "https://example.org/b"}],
+        }
+    )
+    assert new.reason is OutcomeReason.unverified
+    assert Answer.model_validate_json(new.model_dump_json()) == new
+    # The outcome enum is unchanged; the reason is a separate field.
+    assert {o.value for o in Outcome} == {
+        "answered",
+        "not_found",
+        "refused_off_topic",
+        "budget_exhausted",
+        "invalid_input",
+        "error",
+    }
+    with pytest.raises(ValidationError):
+        Answer.model_validate(
+            {**legacy, "related_documents": [{"title": "x", "url": "http://x.org/"}]}
         )

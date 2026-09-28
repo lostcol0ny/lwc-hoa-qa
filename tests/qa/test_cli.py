@@ -68,3 +68,24 @@ def test_missing_keys_is_a_clean_error(
 def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 2
     assert "ask" in capsys.readouterr().out
+
+
+def test_ask_prints_related_documents_for_an_unverified_not_found(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def unverifiable(corpus: Corpus, settings: QASettings) -> QAAsker:
+        jev = FakeJev(
+            relevance={"rules-2023-fines": 0.9},
+            support=0.05,
+            text_to_id={c.text_clean: c.id for c in corpus.chunks},
+        )
+        provider = FakeProvider([FINES_DRAFT])
+        return build_asker(corpus, settings, jev=jev, provider=provider)
+
+    code = main(["ask", "fines?", "--corpus", str(FIXTURE)], asker_factory=unverifiable)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "[not_found]" in out and "couldn't verify a precise answer" in out
+    assert "Related documents:\n- Rules & Regulations 2023\n" in out
+    assert "  https://example.org/hoa/rules-2023.pdf?ver=fixture-1" in out
+    assert "$125" not in out  # the unverified claim is never shown

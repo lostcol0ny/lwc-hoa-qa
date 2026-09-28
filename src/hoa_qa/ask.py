@@ -13,8 +13,8 @@ import re
 import time
 import unicodedata
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence, Set
+from dataclasses import asdict, dataclass, field
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -37,6 +37,7 @@ from hoa_qa.answer.provider import (
     AnswerProvider,
     AnthropicAnswerProvider,
     DraftClaim,
+    DraftIssue,
 )
 from hoa_qa.answer.statute_notes import (
     ApplicabilityNote,
@@ -50,7 +51,9 @@ from hoa_qa.models import (
     Chunk,
     Citation,
     Corpus,
+    DocumentLink,
     Outcome,
+    OutcomeReason,
     citation_url,
 )
 from hoa_qa.retrieval.gate import GATE_QUESTION, run_gate
@@ -67,6 +70,7 @@ from hoa_qa.retrieval.jev import (
     conservative_tokens,
 )
 from hoa_qa.retrieval.sweep import (
+    ScoredChunk,
     SweepPassage,
     batch_request,
     plan_passages,
@@ -99,6 +103,8 @@ BOARD_REFERRAL = (
 OMITTED_NOTE = (
     "Some details could not be verified against the documents and were left out."
 )
+# At most this many related documents are linked from an unverified not_found.
+MAX_RELATED_DOCUMENTS = 5
 
 # Authority rule (docs/qa-core.md, "Source authority"): support is not
 # authority. When any provided passage is AUTHORITATIVE, an answer claim is
@@ -362,7 +368,15 @@ def _claim_trace(
     )
 
 
-_Result = tuple[Outcome, str, tuple[Citation, ...], float | None, tuple[str, ...]]
+@dataclass(frozen=True)
+class _Result:
+    outcome: Outcome
+    text: str
+    citations: tuple[Citation, ...] = ()
+    confidence: float | None = None
+    conflicts: tuple[str, ...] = ()
+    reason: OutcomeReason | None = None
+    related: tuple[DocumentLink, ...] = ()
 
 
 class QAAsker:
@@ -414,9 +428,7 @@ class QAAsker:
         started = time.perf_counter()
         usage = _Usage(model=self._provider.model)
         try:
-            outcome, text, citations, confidence, conflicts = await self._run(
-                question, usage, trace
-            )
+            result = await self._run(question, usage, trace, request_id)
         except Exception as exc:  # any provider failure becomes an error outcome
             if isinstance(exc, PartialCostError):
                 # Siblings of the failed Jev batch still billed; count them.
@@ -428,25 +440,24 @@ class QAAsker:
             logger.error(
                 "ask failed request_id=%s error_type=%s", request_id, error_type
             )
-            outcome, text, citations, confidence, conflicts = (
+            result = _Result(
                 Outcome.error,
                 "Something went wrong answering this question. Please try again "
                 f"later, or read the HOA documents at {self._settings.documents_url}",
-                (),
-                None,
-                (),
             )
         answer = Answer(
             request_id=request_id,
-            outcome=outcome,
-            answer_text=text,
-            citations=citations,
-            confidence=confidence,
-            conflicts_noted=conflicts,
+            outcome=result.outcome,
+            answer_text=result.text,
+            citations=result.citations,
+            confidence=result.confidence,
+            conflicts_noted=result.conflicts,
             disclaimer=DISCLAIMER,
+            reason=result.reason,
+            related_documents=result.related,
         )
         latency_ms = (time.perf_counter() - started) * 1000
-        result = AskResult(
+        asked = AskResult(
             answer=answer,
             estimated_cost_usd=usage.cost(),
             jev_input_tokens=usage.jev_input_tokens,
@@ -454,20 +465,19 @@ class QAAsker:
             answer_output_tokens=usage.answer_output_tokens,
             latency_ms=latency_ms,
         )
-        _log_result(result, usage)
-        return result
+        _log_result(asked, usage)
+        return asked
 
-    async def _run(self, question: str, usage: _Usage, trace: AskTrace) -> _Result:
+    async def _run(
+        self, question: str, usage: _Usage, trace: AskTrace, request_id: str
+    ) -> _Result:
         s = self._settings
         cleaned = clean_question(question)
         if cleaned is None:
-            return (
+            return _Result(
                 Outcome.invalid_input,
                 f"Please enter a question between 1 and {MAX_QUESTION_CHARS} "
                 "characters.",
-                (),
-                None,
-                (),
             )
 
         # One bound for every Jev request this call makes (sweep and support).
@@ -476,14 +486,11 @@ class QAAsker:
         usage.jev_input_tokens += gate.input_tokens
         trace.gate(gate.probability, gate.passed)
         if not gate.passed:
-            return (
+            return _Result(
                 Outcome.refused_off_topic,
                 "I can only answer questions about the Lakewood Creek HOA: its "
                 "rules, governance, fees, amenities, and neighborhood. You can "
                 f"read the HOA documents at {s.documents_url}",
-                (),
-                None,
-                (),
             )
 
         swept = await sweep(
@@ -498,23 +505,30 @@ class QAAsker:
         )
         usage.jev_input_tokens += swept.input_tokens
         trace.sweep(swept.scores, swept.selected)
+        _log_sweep(request_id, swept.selected)
         if not swept.selected:
-            return self._not_found()
+            return self._not_found(OutcomeReason.no_relevant_passages)
 
         passages = [scored.chunk for scored in swept.selected]
         trace.passages(passages)
+        passage_ids = {chunk.id for chunk in passages}
         failed: list[str] | None = None
         authority_failed = False
+        invalid_output = False
+        # Provided passages the model cited, in order, for an unverified
+        # not_found's related-document links (never their text).
+        cited_ids: list[str] = []
         # A first attempt that could stand with its failed claims dropped; a
         # retry that turns out worse falls back to it.
         fallback: tuple[AnswerDraft, list[_Verified]] | None = None
-        for attempt in range(2):
+        for attempt in range(1, 3):
             generated = await self._provider.generate(
                 build_prompt(
                     cleaned,
                     passages,
                     failed_claims=failed,
                     authority_note=authority_failed,
+                    invalid_output=invalid_output,
                 )
             )
             usage.answer_calls += 1
@@ -523,31 +537,65 @@ class QAAsker:
             draft = generated.draft
             if draft is None:
                 usage.notes.append("invalid_draft")
-                trace.attempt(attempt + 1, None, generated.note)
-                failed = []
+                trace.attempt(attempt, None, generated.note)
+                _log_attempt(
+                    request_id,
+                    attempt,
+                    "invalid_draft",
+                    note=generated.note,
+                    issues=generated.issues,
+                )
+                # Code-written, per-claim reasons only: an invalid draft's
+                # text is never echoed back.
+                failed = [_issue_entry(issue) for issue in generated.issues]
+                authority_failed = False
+                invalid_output = True
                 continue
             if not draft.claims:
                 # The model found nothing to say; regenerating would not help.
                 usage.notes.append("no_claims")
-                trace.attempt(attempt + 1, [], generated.note)
+                trace.attempt(attempt, [], generated.note)
+                _log_attempt(request_id, attempt, "no_claims", note=generated.note)
+                if attempt == 1:
+                    return self._not_found(OutcomeReason.no_answer_in_passages)
                 break
+            for c in (c for claim in draft.claims for c in claim.citations):
+                if c.chunk_id in passage_ids and c.chunk_id not in cited_ids:
+                    cited_ids.append(c.chunk_id)
             verified = await self._verify(draft, passages, limit, usage)
-            trace.attempt(attempt + 1, [v.trace for v in verified], generated.note)
+            trace.attempt(attempt, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
-            if not failures and _has_answer(verified):
+            can_drop = _can_drop(verified)
+            clean = not failures and _has_answer(verified)
+            _log_attempt(
+                request_id,
+                attempt,
+                "verified" if clean else "claims_failed",
+                note=generated.note,
+                claims=_claim_diagnostics(draft, verified, passage_ids),
+                fallback_eligible=can_drop,
+            )
+            if clean:
                 # Claims salvage dropped at parse time count as omitted too.
                 return self._answered(draft, verified, dropped=generated.claims_trimmed)
             usage.notes.append(f"claims_failed={len(failures)}")
-            if _can_drop(verified):
-                if attempt == 1:
+            if can_drop:
+                if attempt == 2:
                     return self._answered(draft, verified, dropped=True)
                 fallback = (draft, verified)
-            failed = [rejected(v.statement, v.reason) for v in failures]
+            failed = [
+                rejected(v.statement, v.reason, index)
+                for index, v in enumerate(verified, start=1)
+                if not v.ok
+            ]
             authority_failed = any(v.reason in _AUTHORITY_REASONS for v in failures)
+            invalid_output = False
         if fallback is not None:
             usage.notes.append("used_first_attempt")
             return self._answered(*fallback, dropped=True)
-        return self._not_found()
+        return self._not_found(
+            OutcomeReason.unverified, self._related_documents(cited_ids, passages)
+        )
 
     async def _verify(
         self,
@@ -646,7 +694,7 @@ class QAAsker:
             if key not in seen:
                 seen.add(key)
                 citations.append(citation)
-        return (
+        return _Result(
             Outcome.answered,
             " ".join(parts),
             tuple(citations),
@@ -654,16 +702,52 @@ class QAAsker:
             conflicts,
         )
 
-    def _not_found(self) -> _Result:
-        return (
+    def _not_found(
+        self, reason: OutcomeReason, related: tuple[DocumentLink, ...] = ()
+    ) -> _Result:
+        if reason is OutcomeReason.unverified:
+            # Related passages exist but no answer could be verified: say so,
+            # and point to whole documents, never to unverified text.
+            text = (
+                "I found related passages in the HOA documents but couldn't "
+                "verify a precise answer. Try rephrasing your question"
+            )
+            if related:
+                titles = "; ".join(link.title for link in related)
+                text += f", or see: {titles}."
+            else:
+                text += f", or read the documents at {self._settings.documents_url}."
+            return _Result(Outcome.not_found, text, reason=reason, related=related)
+        return _Result(
             Outcome.not_found,
             "I couldn't find this in the HOA documents. Please contact the Board "
             f"of Directors or management; the documents are at "
             f"{self._settings.documents_url}",
-            (),
-            None,
-            (),
+            reason=reason,
         )
+
+    @staticmethod
+    def _related_documents(
+        cited_ids: Sequence[str], passages: Sequence[Chunk]
+    ) -> tuple[DocumentLink, ...]:
+        """Document-level links: cited passages' documents first, then the
+        rest of the retrieved ones, one link per document URL."""
+        by_id = {chunk.id: chunk for chunk in passages}
+        ordered = [by_id[i] for i in cited_ids if i in by_id] + list(passages)
+        links: dict[str, DocumentLink] = {}
+        for chunk in ordered:
+            if chunk.source_url in links:
+                continue
+            # A statute's URL is one section's page, so its label names it.
+            title = (
+                chunk.citation_label
+                if chunk.authority is Authority.statute
+                else chunk.doc_title
+            )
+            links[chunk.source_url] = DocumentLink(title=title, url=chunk.source_url)
+            if len(links) == MAX_RELATED_DOCUMENTS:
+                break
+        return tuple(links.values())
 
     async def aclose(self) -> None:
         for client in (self._jev, self._provider):
@@ -674,6 +758,11 @@ class QAAsker:
 
 def _has_answer(verified: Sequence[_Verified]) -> bool:
     return any(v.ok and v.kind == "answer" for v in verified)
+
+
+def _issue_entry(issue: DraftIssue) -> str:
+    index = None if issue.index is None else issue.index + 1
+    return rejected("", issue.code, index)
 
 
 def _can_drop(verified: Sequence[_Verified]) -> bool:
@@ -741,12 +830,16 @@ def max_cost_usd(
     biggest = sorted(
         chunks, key=lambda c: len(render_passage(c).encode("utf-8")), reverse=True
     )
+    # At most MAX_CLAIMS entries either way: one per draft claim, or the
+    # capped issues of an invalid draft, which carry no statement at all.
     longest_reason = max(REJECTION_REASONS, key=lambda r: len(REJECTION_REASONS[r]))
     prompt = build_prompt(
         WORST_QUESTION,
         biggest[: settings.sweep_top_k],
-        failed_claims=[rejected(worst_statement, longest_reason)] * MAX_CLAIMS,
+        failed_claims=[rejected(worst_statement, longest_reason, MAX_CLAIMS)]
+        * MAX_CLAIMS,
         authority_note=True,
+        invalid_output=True,
     )
     answer_input = (
         len((prompt.system + prompt.user).encode("utf-8"))
@@ -779,11 +872,111 @@ def _log_result(result: AskResult, usage: _Usage) -> None:
         "citations": len(result.answer.citations),
         "estimated_cost_usd": round(result.estimated_cost_usd, 6),
         "notes": ",".join(usage.notes),
+        "reason": result.answer.reason.value if result.answer.reason else "",
     }
     logger.info(
         "ask " + " ".join(f"{k}=%s" for k in fields),
         *fields.values(),
         extra={"hoa_qa": fields},
+    )
+
+
+# --- diagnostics logs --------------------------------------------------------
+# Text-free by construction (§6): only codes, numbers, flags, and the chunk
+# IDs of provided passages. A model-written chunk_id that names no provided
+# passage is logged as "?", since the model can write anything there.
+
+
+def _log_sweep(request_id: str, selected: Sequence[ScoredChunk]) -> None:
+    fields = {
+        "request_id": request_id,
+        "selected": [
+            {"chunk_id": s.chunk.id, "score": round(s.probability, 3)} for s in selected
+        ],
+    }
+    logger.info(
+        "ask sweep request_id=%s selected=%s",
+        request_id,
+        ",".join(f"{s['chunk_id']}:{s['score']}" for s in fields["selected"]) or "-",
+        extra={"hoa_qa_sweep": fields},
+    )
+
+
+@dataclass(frozen=True)
+class _ClaimDiagnostic:
+    index: int  # 1-based, as the retry prompt numbers claims
+    kind: str
+    essential: bool
+    reason: str
+    support: float | None
+    chunk_ids: tuple[str, ...]
+    statement_chars: int
+
+    def compact(self) -> str:
+        essential = "E" if self.essential else "n"
+        return (
+            f"{self.index}/{self.kind}/{essential}/{self.reason}/s={self.support}"
+            f"/{'+'.join(self.chunk_ids)}/len={self.statement_chars}"
+        )
+
+
+def _claim_diagnostics(
+    draft: AnswerDraft, verified: Sequence[_Verified], passage_ids: Set[str]
+) -> list[_ClaimDiagnostic]:
+    return [
+        _ClaimDiagnostic(
+            index=index,
+            kind=claim.kind,
+            essential=claim.essential,
+            reason=v.reason,
+            support=None if v.trace.support is None else round(v.trace.support, 3),
+            chunk_ids=tuple(
+                c.chunk_id if c.chunk_id in passage_ids else "?"
+                for c in claim.citations
+            ),
+            statement_chars=len(claim.statement),
+        )
+        for index, (claim, v) in enumerate(
+            zip(draft.claims, verified, strict=True), start=1
+        )
+    ]
+
+
+def _log_attempt(
+    request_id: str,
+    attempt: int,
+    terminal: str,
+    *,
+    note: str | None = None,
+    issues: Sequence[DraftIssue] = (),
+    claims: Sequence[_ClaimDiagnostic] = (),
+    fallback_eligible: bool = False,
+) -> None:
+    """One answer-model attempt: how it ended and why each claim failed."""
+    issue_rows = [
+        {"index": None if i.index is None else i.index + 1, "code": i.code}
+        for i in issues
+    ]
+    fields = {
+        "request_id": request_id,
+        "attempt": attempt,
+        "terminal": terminal,
+        "fallback_eligible": fallback_eligible,
+        "note": note or "",
+        "issues": issue_rows,
+        "claims": [asdict(c) for c in claims],
+    }
+    logger.info(
+        "ask attempt request_id=%s attempt=%s terminal=%s fallback_eligible=%s "
+        "claims=%s issues=%s note=%s",
+        request_id,
+        attempt,
+        terminal,
+        fallback_eligible,
+        ",".join(c.compact() for c in claims) or "-",
+        ",".join(f"{i['index'] or '-'}:{i['code']}" for i in issue_rows) or "-",
+        note or "-",
+        extra={"hoa_qa_attempt": fields},
     )
 
 

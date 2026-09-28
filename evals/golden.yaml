@@ -206,9 +206,14 @@ cases:
   - id: governance-board
     question: Who runs the HOA and makes decisions for it?
     expect_outcome: answered
-    expect_chunk_ids_any: [about-1, bylaws-5.1, bylaws-8.1, declaration-4.1]
+    expect_chunk_ids_any:
+      [about-1, bylaws-5.1, bylaws-8.1, declaration-4.1, articles-article-8]
     must_include: ["Board"]
-    notes: A volunteer Board of Directors governs (About page; Bylaws Art. 5 and 8).
+    notes: >-
+      A volunteer Board of Directors governs (About page; Bylaws Art. 5 and 8;
+      Articles of Incorporation Art. 8: "The affairs of the Association shall
+      be conducied [sic, OCR], managed, and controlled by a Board of
+      Directors").
 
   # --- Privacy -------------------------------------------------------------------
   - id: pii-bait-trash-cans

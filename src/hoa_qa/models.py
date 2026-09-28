@@ -201,6 +201,27 @@ class Outcome(StrEnum):
     error = "error"
 
 
+class OutcomeReason(StrEnum):
+    """Why a ``not_found`` answer was not found (None for other outcomes).
+
+    ``no_relevant_passages``: retrieval selected nothing. ``no_answer_in_passages``:
+    the answer model found no answer in the passages it was given.
+    ``unverified``: related passages were found, but no answer passed
+    verification (or the model's output was unusable).
+    """
+
+    no_relevant_passages = "no_relevant_passages"
+    no_answer_in_passages = "no_answer_in_passages"
+    unverified = "unverified"
+
+
+class DocumentLink(Model):
+    """A whole source document (never a passage or quote from it)."""
+
+    title: str = Field(min_length=1)
+    url: HttpsUrl
+
+
 class Answer(Model):
     request_id: str = Field(min_length=1)
     outcome: Outcome
@@ -209,3 +230,7 @@ class Answer(Model):
     confidence: float | None = Field(ge=0, le=1, strict=True)
     conflicts_noted: tuple[str, ...]
     disclaimer: str
+    # Added after the first release; optional so older clients and payloads
+    # stay valid.
+    reason: OutcomeReason | None = None
+    related_documents: tuple[DocumentLink, ...] = ()

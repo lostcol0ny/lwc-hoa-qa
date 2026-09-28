@@ -36,6 +36,45 @@ function groupCitations(citations) {
   return Array.from(groups.values());
 }
 
+// Document links for a not_found the server couldn't verify (reason
+// "unverified"): whole documents only, HTTPS only, one per URL, at most 5.
+// Anything else in the payload is ignored.
+const MAX_RELATED_DOCUMENTS = 5;
+function relatedDocuments(answer) {
+  if (!answer || !Array.isArray(answer.related_documents)) return [];
+  const seen = new Set();
+  const links = [];
+  for (const doc of answer.related_documents) {
+    if (!doc || typeof doc !== "object" || !isHttpsUrl(doc.url) || seen.has(doc.url)) continue;
+    const title = String(doc.title == null ? "" : doc.title).trim() || "HOA document";
+    seen.add(doc.url);
+    links.push({ title: title, url: doc.url });
+    if (links.length === MAX_RELATED_DOCUMENTS) break;
+  }
+  return links;
+}
+
+// Heading for an answer card: a not_found with reason "unverified" found
+// related passages but no verifiable answer, which is not "not found".
+const OUTCOME_HEADINGS = Object.freeze({
+  answered: { status: "Answered", title: "Answer" },
+  not_found: { status: "Not found", title: "Not found in the HOA documents" },
+  refused_off_topic: { status: "Off topic", title: "That question isn't about the HOA" },
+  budget_exhausted: { status: "Paused", title: "Taking a break for the rest of the month" },
+  invalid_input: { status: "Check input", title: "Please check your question" },
+  error: { status: "Error", title: "Something went wrong" },
+});
+const UNVERIFIED_HEADING = Object.freeze({
+  status: "Not verified",
+  title: "Couldn't verify an answer",
+});
+function outcomeHeading(answer) {
+  const outcome =
+    answer && Object.hasOwn(OUTCOME_HEADINGS, answer.outcome) ? answer.outcome : "error";
+  if (outcome === "not_found" && answer.reason === "unverified") return UNVERIFIED_HEADING;
+  return OUTCOME_HEADINGS[outcome];
+}
+
 // What an Enter keydown in the question box should do:
 // "submit", "newline" (let the browser insert it), "block" (swallow it) or
 // "ignore" (not ours; leave the event alone). IME composition always wins:
@@ -134,6 +173,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     groupCitations,
     normalizeQuote,
+    relatedDocuments,
+    outcomeHeading,
     isHttpsUrl,
     keyAction,
     PROGRESS_STAGES,
@@ -157,14 +198,6 @@ if (typeof document !== "undefined") {
     const progressStatus = document.getElementById("progress-status");
     let composing = false;
 
-    const OUTCOMES = {
-      answered: { status: "Answered", title: "Answer" },
-      not_found: { status: "Not found", title: "Not found in the HOA documents" },
-      refused_off_topic: { status: "Off topic", title: "That question isn't about the HOA" },
-      budget_exhausted: { status: "Paused", title: "Taking a break for the rest of the month" },
-      invalid_input: { status: "Check input", title: "Please check your question" },
-      error: { status: "Error", title: "Something went wrong" },
-    };
     const SHOW_DOCUMENTS_LINK = new Set(["not_found", "refused_off_topic", "budget_exhausted"]);
 
     // The beam only animates where the angle property can be registered;
@@ -270,12 +303,13 @@ if (typeof document !== "undefined") {
     }
 
     function renderAnswer(answer, question) {
-      const outcome = Object.hasOwn(OUTCOMES, answer.outcome) ? answer.outcome : "error";
+      const outcome = Object.hasOwn(OUTCOME_HEADINGS, answer.outcome) ? answer.outcome : "error";
+      const heading = outcomeHeading(answer);
       const card = el("article", "result outcome-" + outcome);
 
       const head = el("div", "result-head");
-      head.append(el("span", "status", OUTCOMES[outcome].status));
-      head.append(el("h2", null, OUTCOMES[outcome].title));
+      head.append(el("span", "status", heading.status));
+      head.append(el("h2", null, heading.title));
       card.append(head);
 
       if (question) card.append(el("p", "asked", "You asked: " + question));
@@ -295,6 +329,21 @@ if (typeof document !== "undefined") {
         card.append(el("h3", "sources-title", "Sources"));
         const list = el("ul", "sources");
         for (const group of groups) list.append(renderSourceGroup(group));
+        card.append(list);
+      }
+
+      // Only for a not_found: links to whole documents, never passage text.
+      const related = outcome === "not_found" ? relatedDocuments(answer) : [];
+      if (related.length > 0) {
+        card.append(el("h3", "sources-title", "Related documents"));
+        const list = el("ul", "sources related");
+        for (const doc of related) {
+          const item = el("li", "source");
+          const label = el("p", "source-label");
+          label.append(externalLink(doc.url, doc.title));
+          item.append(label);
+          list.append(item);
+        }
         card.append(list);
       }
 

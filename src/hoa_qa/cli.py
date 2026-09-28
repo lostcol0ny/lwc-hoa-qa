@@ -68,6 +68,10 @@ def _render(result: AskResult) -> str:
     if answer.conflicts_noted:
         lines.append("")
         lines.extend(f"Note: {conflict}" for conflict in answer.conflicts_noted)
+    if answer.related_documents:
+        lines += ["", "Related documents:"]
+        for link in answer.related_documents:
+            lines += [f"- {link.title}", f"  {link.url}"]
     lines += [
         "",
         answer.disclaimer,
