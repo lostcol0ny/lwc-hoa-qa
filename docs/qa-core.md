@@ -335,7 +335,8 @@ Two diagnostics records explain a `not_found`:
 - `ask attempt` (`record.hoa_qa_attempt`), one per answer-model call:
   `attempt`, `terminal` (`verified`, `claims_failed`, `invalid_draft`,
   `no_claims`), `fallback_eligible` (the drop rule would let it stand),
-  the provider's parse `note` (field paths and error types), an invalid
+  the provider's parse `note` (schema field paths and Pydantic error types;
+  a key the model wrote, such as an extra field, becomes `<extra>`), an invalid
   draft's `issues` (claim number and code), and per claim: `index`, `kind`,
   `essential`, rejection `reason`, `support` score, cited `chunk_ids`, and
   `statement_chars`. A cited `chunk_id` that names no provided passage is

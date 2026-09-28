@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -217,11 +218,33 @@ def draft_issues(exc: ValidationError) -> tuple[DraftIssue, ...]:
     return tuple(ordered[:MAX_CLAIMS])
 
 
+# Path components a parse note may contain: the draft schema's own field
+# names. An error location can also hold a key the model wrote (an extra
+# field is reported under its own name), and the note reaches logs, so
+# anything outside this set is replaced by a fixed marker.
+_NOTE_FIELDS = frozenset(
+    name
+    for model in (AnswerDraft, DraftClaim, DraftCitation)
+    for name in model.model_fields
+)
+_EXTRA = "<extra>"
+# Pydantic error types are code-owned snake_case identifiers; checked anyway.
+_ERROR_TYPE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _note_path(loc: tuple[int | str, ...]) -> str:
+    return ".".join(
+        "#" if isinstance(x, int) else x if x in _NOTE_FIELDS else _EXTRA for x in loc
+    )
+
+
 def _describe(exc: ValidationError) -> str:
-    """Error locations and types; never the offending values."""
+    """Error locations and types; never the offending values or model-written
+    keys (see _NOTE_FIELDS)."""
     parts = {
-        ".".join("#" if isinstance(x, int) else str(x) for x in e["loc"])
-        + f":{e['type']}"
+        _note_path(e["loc"])
+        + ":"
+        + (e["type"] if _ERROR_TYPE.fullmatch(e["type"]) else "<error>")
         for e in exc.errors()
     }
     return ",".join(sorted(parts))[:300]
