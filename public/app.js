@@ -75,6 +75,14 @@ function outcomeHeading(answer) {
   return OUTCOME_HEADINGS[outcome];
 }
 
+// Whether to empty the question box once this outcome is shown. The answer
+// card repeats the question ("You asked: …"), so nothing is lost. The text is
+// kept when the person is likely to want it again: to rephrase a question the
+// documents didn't answer, or to resend after an error.
+function shouldClearQuestion(outcome) {
+  return outcome === "answered" || outcome === "refused_off_topic";
+}
+
 // What an Enter keydown in the question box should do:
 // "submit", "newline" (let the browser insert it), "block" (swallow it) or
 // "ignore" (not ours; leave the event alone). IME composition always wins:
@@ -177,6 +185,7 @@ if (typeof module !== "undefined" && module.exports) {
     outcomeHeading,
     isHttpsUrl,
     keyAction,
+    shouldClearQuestion,
     PROGRESS_STAGES,
     progressStage,
     createProgress,
@@ -390,6 +399,11 @@ if (typeof document !== "undefined") {
         setLoading(false);
         if (body && typeof body === "object" && typeof body.outcome === "string") {
           renderAnswer(body, question);
+          // Not if they have already started typing the next question.
+          if (shouldClearQuestion(body.outcome) && textarea.value.trim() === question) {
+            textarea.value = "";
+            updateCounter();
+          }
         } else {
           renderFailure(question);
         }
