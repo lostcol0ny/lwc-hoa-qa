@@ -178,7 +178,7 @@ for it, and the golden questions are committed fixtures, not user input.
 | `GATE_THRESHOLD` | `0.5` | Minimum on-topic probability |
 | `SWEEP_THRESHOLD` | `0.3` | Minimum relevance probability for a chunk |
 | `SWEEP_TOP_K` | `8` | Maximum passages sent to the answer model |
-| `JEV_CONCURRENCY` | `4` | Maximum concurrent Jev requests per `ask()` (sweep and support share one semaphore). `SWEEP_CONCURRENCY` is still read as a fallback. |
+| `JEV_CONCURRENCY` | `16` | Maximum concurrent Jev requests per `ask()` (sweep and support share one semaphore). `SWEEP_CONCURRENCY` is still read as a fallback. Raised from 4 on 2026-10-09: the sweep is about 100 requests, so at 4 it ran as some 25 rounds one after another. Jev 1.13 allows 80 requests and 100K tokens per second per account, and the sweep is ~190K tokens, so above some value the token rate is the floor and a higher setting only makes the SDK back off. The bound is per question, so simultaneous questions share the account limit. Compare `sweep_ms` in the request log (or `stage p50` in the eval table) before and after changing it. |
 | `SUPPORT_THRESHOLD` | `0.5` | Minimum support probability for a claim |
 | `ANSWER_MAX_TOKENS` | `2048` | Answer-model output cap per call (256–16000). It is part of `max_cost_usd`. Raise it for models with adaptive thinking, since thinking counts against it. |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Link used in refusal / not-found messages |
@@ -229,6 +229,9 @@ the Illinois statutes): median answered question $0.0198, total $0.5175,
 latency p50 9.9 s / p95 17.2 s. Before the statutes (21 cases, 360 chunks):
 median $0.0115, latency p50 6.6 s / p95 16.0 s. The sweep and support
 estimates in the table are scaled from those runs.
+Those latencies were measured at `JEV_CONCURRENCY=4`; the default is now 16 and
+has not been re-measured. The eval table's `stage p50` line shows where the
+time goes (gate, sweep, answer, verify).
 A gate refusal costs only the gate. Invalid input costs nothing.
 
 ### Worst-case bound: `max_cost_usd` (provable)
@@ -324,7 +327,10 @@ figures were computed on 2026-09-27 from a `--no-llm` build.
 ## Logging and privacy
 
 `hoa_qa.ask` logs one structured line per request (also attached as
-`record.hoa_qa`): `request_id`, `outcome`, `latency_ms`, `jev_input_tokens`,
+`record.hoa_qa`): `request_id`, `outcome`, `latency_ms`, `gate_ms`, `sweep_ms`,
+`answer_ms`, `verify_ms` (wall-clock time per stage; `answer_ms` and `verify_ms`
+add up both attempts when the answer is regenerated, and a stage that never ran
+is 0), `jev_input_tokens`,
 `answer_model`, `answer_calls`, `answer_input_tokens`, `answer_output_tokens`,
 `citations`, `estimated_cost_usd`, `notes` (`invalid_draft`, `no_claims`,
 `claims_failed=N`, `used_first_attempt`), and `reason`.

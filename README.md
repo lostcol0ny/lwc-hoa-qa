@@ -121,7 +121,7 @@ default".
 | `SWEEP_THRESHOLD` | `0.3` | QA core | Minimum chunk relevance |
 | `SWEEP_TOP_K` | `8` | QA core | Maximum passages sent to the answer model |
 | `SUPPORT_THRESHOLD` | `0.5` | QA core | Minimum claim-support probability |
-| `JEV_CONCURRENCY` | `4` | QA core | Concurrent Jev requests per question (`SWEEP_CONCURRENCY` is a fallback name) |
+| `JEV_CONCURRENCY` | `16` | QA core | Concurrent Jev requests per question (`SWEEP_CONCURRENCY` is a fallback name). Raised from 4 on 2026-10-09; the latency figures below were measured at 4 |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | QA core, web | Link in refusals, not-found and budget pages; must be `https://` |
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | web | Hard monthly spend cap (UTC calendar month) |
 | `BUDGET_RESERVE_PER_REQUEST_USD` | `0.05` | web | Minimum per-question reservation R |
