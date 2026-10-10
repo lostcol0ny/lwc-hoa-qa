@@ -1,6 +1,7 @@
 name: Answer cache
-# Manual: answers the curated questions with the real APIs, then scores the
-# cache matcher on known paraphrases and near-misses. Costs about as much as
+# Manual: verifies the reviewed answers in evals/cache_questions.yaml against
+# the corpus (drafting any that have no claims yet), then scores the cache
+# matcher on known paraphrases and near-misses. Costs about as much as
 # an eval run. Never runs on push or pull_request, and does not deploy: the
 # built cache is an artifact to review (docs/qa-core.md, "Curated answer cache").
 on:
@@ -70,7 +71,8 @@ jobs:
         run: |
           set -o pipefail
           uv run hoa-qa cache build evals/cache_questions.yaml \
-            --corpus build/corpus.json --out answer_cache.json | tee cache-build.txt
+            --corpus build/corpus.json --out answer_cache.json \
+            --propose proposed_questions.yaml | tee cache-build.txt
       - name: Check the matcher
         if: steps.secrets.outputs.enabled == 'true'
         env:
@@ -93,6 +95,7 @@ jobs:
           name: answer-cache
           path: |
             answer_cache.json
+            proposed_questions.yaml
             cache-build.txt
             cache-check.txt
           if-no-files-found: warn

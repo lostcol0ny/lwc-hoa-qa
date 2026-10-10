@@ -486,13 +486,22 @@ class QAAsker:
     async def __call__(self, question: str) -> AskResult:
         return await self.ask_traced(question, NO_TRACE)
 
-    async def ask_traced(self, question: str, trace: AskTrace) -> AskResult:
-        """``__call__`` reporting each stage to ``trace`` (eval diagnostics only)."""
+    async def ask_traced(
+        self, question: str, trace: AskTrace, *, reviewed: AnswerDraft | None = None
+    ) -> AskResult:
+        """``__call__`` reporting each stage to ``trace`` (eval diagnostics only).
+
+        ``reviewed`` (cache builds only) is an operator-written draft to
+        verify in place of asking the answer model; see ``_run_reviewed``.
+        """
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         usage = _Usage(model=self._provider.model)
         try:
-            result = await self._run(question, usage, trace, request_id)
+            if reviewed is None:
+                result = await self._run(question, usage, trace, request_id)
+            else:
+                result = await self._run_reviewed(question, reviewed, usage, trace)
         except Exception as exc:  # any provider failure becomes an error outcome
             if isinstance(exc, PartialCostError):
                 # Siblings of the failed Jev batch still billed; count them.
@@ -681,6 +690,52 @@ class QAAsker:
         return self._not_found(
             OutcomeReason.unverified, self._related_documents(cited_ids, passages)
         )
+
+    async def _run_reviewed(
+        self, question: str, draft: AnswerDraft, usage: _Usage, trace: AskTrace
+    ) -> _Result:
+        """Verify an operator-written draft; all of it must pass, or nothing.
+
+        No gate, cache, or answer model. The sweep still runs, because the
+        authority rule depends on which passages are relevant to the question
+        (an informal source can't answer next to an authoritative one); the
+        passages each claim cites are added to the sweep's selection. Unlike
+        a model draft there is no retry and no dropping: one failed claim
+        means the answer is not stored, so reviewed text is never altered.
+        """
+        s = self._settings
+        cleaned = clean_question(question)
+        if cleaned is None:
+            return _Result(Outcome.invalid_input, "The question is empty or too long.")
+        limit = asyncio.Semaphore(s.jev_concurrency)
+        with _timed(usage, "sweep"):
+            swept = await sweep(
+                self._jev,
+                cleaned,
+                self._plan.passages,
+                top_k=s.sweep_top_k,
+                threshold=s.sweep_threshold,
+                limit=limit,
+                count_tokens=self._count_tokens,
+                limits=self._limits,
+            )
+        usage.jev_input_tokens += swept.input_tokens
+        trace.sweep(swept.scores, swept.selected)
+        by_id = {chunk.id: chunk for chunk in self._corpus.chunks}
+        passages = [scored.chunk for scored in swept.selected]
+        provided = {chunk.id for chunk in passages}
+        for citation in (c for claim in draft.claims for c in claim.citations):
+            chunk = by_id.get(citation.chunk_id)
+            if chunk is not None and chunk.id not in provided:
+                provided.add(chunk.id)
+                passages.append(chunk)
+        trace.passages(passages)
+        with _timed(usage, "verify"):
+            verified = await self._verify(draft, passages, limit, usage)
+        trace.attempt(1, [v.trace for v in verified], "reviewed")
+        if all(v.ok for v in verified) and _has_answer(verified):
+            return self._answered(draft, verified, dropped=False)
+        return self._not_found(OutcomeReason.unverified)
 
     async def _lookup(
         self, question: str, usage: _Usage, limit: asyncio.Semaphore, request_id: str

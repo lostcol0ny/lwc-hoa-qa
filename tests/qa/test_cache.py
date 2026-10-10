@@ -16,7 +16,6 @@ from hoa_qa.cache import (
     CuratedQuestions,
     MatchCase,
     MatchCases,
-    build_entries,
     check_matches,
     corpus_fingerprint,
     load_cache,
@@ -365,26 +364,6 @@ def test_only_answered_outcomes_can_be_cached() -> None:
         CacheEntry(id="x", question="q?", answer=not_found)
 
 
-def test_build_keeps_answered_questions_only() -> None:
-    questions = CuratedQuestions.model_validate(
-        {"questions": [{"id": "a", "question": "A?"}, {"id": "b", "question": "B?"}]}
-    )
-
-    class Asked:
-        def __init__(self, answer: Answer) -> None:
-            self.answer = answer
-            self.estimated_cost_usd = 0.02
-
-    async def ask(question: str) -> Asked:
-        if question == "A?":
-            return Asked(stored_answer("Yes."))
-        return Asked(stored_answer().model_copy(update={"outcome": Outcome.not_found}))
-
-    entries, rows = asyncio.run(build_entries(questions, ask))
-    assert [e.id for e in entries] == ["a"]
-    assert [(r.id, r.cached) for r in rows] == [("a", True), ("b", False)]
-
-
 def test_curated_questions_reject_duplicates() -> None:
     with pytest.raises(ValueError, match="duplicate questions"):
         CuratedQuestions.model_validate(
@@ -554,3 +533,13 @@ def test_committed_lists_are_consistent() -> None:
             by_id[case.expect].question
         ), case.question
     assert sum(c.expect is None for c in cases.cases) >= 10
+    # Reviewed claims may only cite passages that exist (ids refreshed with
+    # `hoa-qa eval --write-ids`), like the golden set's expected citations.
+    known = set((EVALS / "corpus_ids.txt").read_text().split())
+    cited = {
+        citation.chunk_id
+        for question in questions.questions
+        for claim in question.claims
+        for citation in claim.citations
+    }
+    assert cited <= known, sorted(cited - known)

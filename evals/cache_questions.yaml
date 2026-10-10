@@ -2,13 +2,23 @@
 #   uv run hoa-qa cache build evals/cache_questions.yaml \
 #     --corpus build/corpus.json --out build/answer_cache.json
 #
-# Each question is answered once by the full pipeline and the verified answer
-# is stored. A resident's question that Jev judges to be the same question
-# gets the stored answer instead of a fresh one.
+# A resident's question that Jev judges to be the same as one of these gets
+# the stored answer instead of a fresh one.
+#
+# `claims` is the answer residents will see, sentence by sentence, in this
+# order. The build does not rewrite it: it checks that every quote is in the
+# cited passage word for word and that the passages state everything the
+# sentence says, and stores the answer only if every claim passes. So a change
+# here is a change to what residents read, and it goes through review like
+# code. If the documents change and a claim no longer holds, the build fails
+# for that question instead of serving stale text.
+#
+# A question with no `claims` is drafted by the answer model at build time.
+# Use that to get a first version: `--propose FILE` writes this list with the
+# drafted claims filled in, ready to review, edit and commit.
 #
 # Keep entries distinct: two entries that ask nearly the same thing would have
-# two different stored answers for one question. Review the built file before
-# shipping it: whatever the pipeline answered is what residents will see.
+# two different stored answers for one question.
 #
 # No individuals' names belong in this file.
 questions:
@@ -16,14 +26,90 @@ questions:
     question: How much are the HOA dues this year?
   - id: dues-history
     question: How have the annual HOA dues changed over the years?
+    claims:
+      - statement: >-
+          The Declaration capped the annual assessment at $326.00 per Unit
+          until the calendar year beginning January 1, 2002.
+        citations:
+          - chunk_id: declaration-8.4
+            quote: >-
+              until the calendar year beginning January 1, 2002, the annual
+              assessment shall be not more than Three Hundred Twenty-Six and
+              00/100 ($326.00) per Unit
+      - statement: >-
+          From January 1, 2002 on, the Declaration allows the annual
+          assessment to be increased each year, either by a vote of the Owners
+          or by action of the Board without a vote of the Owners.
+        citations:
+          - chunk_id: declaration-8.4
+            quote: the annual assessment may be increased by vote of the Owners of the Association
+          - chunk_id: declaration-8.4
+            quote: by action of the Board and without the necessity for a vote of the Owners
+      - statement: >-
+          Board meeting minutes from December 29, 2022 record a proposed 2023
+          budget with an increase of $5.00 per quarter, an assessment of $99
+          per quarter, and an approved motion to adopt the 2023 budget.
+        citations:
+          - chunk_id: minutes-2022-12-29-meeting
+            quote: Proposed 2023 budget, increase of $5.00 per quarter. Assessment $99 per quarter
+          - chunk_id: minutes-2022-12-29-meeting
+            quote: Vote to adopt 2023 budget.
+      - statement: >-
+          The HOA website lists the 2026 assessment as $452 per year or $113
+          per quarter.
+        citations:
+          - chunk_id: home-1
+            quote: "2026 Assessment Prices: $452 year or $113 per quarter"
   - id: fine-second-violation
     question: Under the current rules, what is the fine for a second violation?
   - id: fine-third-violation
     question: What is the fine for a third violation of the rules?
   - id: fine-continuing-violation
     question: If a violation keeps going after the fines start, is there a daily fine?
+    claims:
+      - statement: >-
+          Yes. Under the current Rules' fining schedule, the fourth and each
+          subsequent violation is fined daily, at $75 per day.
+        citations:
+          - chunk_id: rules-2023-3.B
+            quote: 4th and subsequent - fined daily@ $75 per day
+      - statement: >-
+          The earlier steps in that schedule are a courtesy letter for the
+          first violation, $75 for the second, and $125 for the third.
+        citations:
+          - chunk_id: rules-2023-3.B
+            quote: 1st The courtesy letter 2nd - $75 3rd - $125
   - id: holiday-lights
     question: When can holiday lights go up, and when do they have to come down?
+    claims:
+      - statement: >-
+          The Declaration and the current Rules both limit holiday decorative
+          lights to the period between December 1st and January 10th.
+        citations:
+          - chunk_id: rules-2023-2.9
+            quote: >-
+              decorative lights may only be displayed between December 1st and
+              January 10th, as provided in the Declaration
+          - chunk_id: declaration-5.8
+            quote: Seasonal holiday decorative lights may be displayed between December first
+      - statement: >-
+          Under the current Rules, decorative items other than lights may be
+          displayed between the day after Thanksgiving and the end of January,
+          weather permitting.
+        citations:
+          - chunk_id: rules-2023-2.9
+            quote: >-
+              decorative items may also be displayed between the day after
+              Thanksgiving and the end of January (weather permitting)
+      - statement: >-
+          Gutter light hooks may be left attached to gutters, but the lights
+          themselves may not be left attached and must be removed.
+        citations:
+          - chunk_id: rules-2023-2.9
+            quote: >-
+              Gutter light hooks may be left attached to gutters and are not in
+              violation, but lights may not be left attached to gutters and
+              must be removed.
   - id: pool-guests
     question: How many guests can I bring to the pool?
   - id: pool-unpaid-dues
@@ -32,6 +118,30 @@ questions:
     question: What is the largest satellite dish I'm allowed to install?
   - id: quiet-hours
     question: What are the quiet hours in the neighborhood?
+    claims:
+      - statement: >-
+          The current Rules say loud noises from television, stereo equipment,
+          musical instruments, pets and other disturbances should be avoided
+          at all times.
+        citations:
+          - chunk_id: rules-2023-2.2
+            quote: >-
+              Loud noises from television, stereo equipment, musical
+              instruments, annoying pets and other disturbances should be
+              avoided at all times
+      - statement: >-
+          The Rules single out the hours from 10 p.m. on weekdays, or 11 p.m.
+          on weekends, until 8 a.m.
+        citations:
+          - chunk_id: rules-2023-2.2
+            quote: especially between the hours of 10 p.m. on weekdays and 1 1p.m on weekends and 8 a.m.
+      - statement: >-
+          A homeowner disturbed by a loud noise should first try to notify
+          the person causing it, or contact local law enforcement if speaking
+          to them seems likely to lead to an altercation.
+        citations:
+          - chunk_id: rules-2023-2.2
+            quote: s/he should first attempt to notify the disturbing party
   - id: arch-approval-fence-shed
     question: How do I get approval to put up a fence or a shed?
   - id: arch-unapproved-work
