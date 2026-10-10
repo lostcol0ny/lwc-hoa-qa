@@ -4,7 +4,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 60,
-      "includeFiles": "corpus.json",
+      "includeFiles": "{corpus.json,answer_cache.json}",
       "excludeFiles": "{tests/**,docs/**,public/**,.github/**,**/test_*.py}"
     }
   },

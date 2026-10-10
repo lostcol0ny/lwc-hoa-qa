@@ -16,6 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # Relative to the working directory: the repo root locally, and the project
 # base on Vercel (where the package may be installed outside the repo tree).
 DEFAULT_CORPUS_PATH = Path("corpus.json")
+# Optional: without the file the app answers every question the long way.
+DEFAULT_ANSWER_CACHE_PATH = Path("answer_cache.json")
 DEFAULT_DOCUMENTS_URL = "https://lakewoodcreekhoa.com/"
 DEFAULT_MONTHLY_BUDGET_USD = 5.0
 DEFAULT_BUDGET_RESERVE_PER_REQUEST_USD = 0.05
@@ -63,6 +65,7 @@ class WebSettings:
     rate_limit_per_hour: int
     rate_limit_per_day: int
     fake_asker: bool
+    answer_cache_path: Path = DEFAULT_ANSWER_CACHE_PATH
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WebSettings":
@@ -90,6 +93,9 @@ class WebSettings:
             ),
             # A dev convenience only; never honored in production.
             fake_asker=env.get("HOA_QA_FAKE_ASKER") == "1" and not production,
+            answer_cache_path=Path(
+                env.get("ANSWER_CACHE_PATH") or DEFAULT_ANSWER_CACHE_PATH
+            ),
         )
 
 

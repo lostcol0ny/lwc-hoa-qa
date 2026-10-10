@@ -218,8 +218,11 @@ def test_stage_timing_covers_every_stage_that_ran(
     result = run(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
     assert result.answer.outcome is Outcome.answered
     assert tuple(result.stage_ms) == STAGES
-    assert all(ms > 0 for ms in result.stage_ms.values())
-    # Stages run one after another, so they cannot add up to more than the total.
+    # No answer cache is attached here, so the lookup never runs.
+    assert result.stage_ms["cache"] == 0
+    assert all(ms > 0 for stage, ms in result.stage_ms.items() if stage != "cache")
+    # These stages run one after another, so they cannot add up to more than
+    # the total.
     assert sum(result.stage_ms.values()) <= result.latency_ms
 
 

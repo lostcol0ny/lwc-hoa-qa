@@ -149,6 +149,65 @@ The model never decides whether these appear (`answer/statute_notes.py`):
   forbids applicability conclusions. Statute claims otherwise go through the
   same quote and support checks as every other claim.
 
+## Curated answer cache
+
+Optional. Without an `answer_cache.json` the pipeline is exactly as above.
+
+**What it is.** `evals/cache_questions.yaml` is a committed list of common
+questions. `hoa-qa cache build` runs each one through the full pipeline (no
+cache attached) and stores the verified answer of every one that came out
+`answered`. At request time, a question that Jev judges to be the same as a
+stored one gets the stored answer; the sweep and the answer model are skipped.
+
+**Why curated.** Only questions from the committed list are ever stored, so
+no resident's text is kept (the rule in "Logging and privacy" still holds)
+and nobody outside can add or change an entry.
+
+**How a question is matched** (`hoa_qa/cache.py`):
+
+1. *Exact.* If the cleaned question equals a curated one after folding case,
+   punctuation and spacing, its answer is returned with no model call at all.
+2. *Number guard (code).* Only entries that mention the same numbers as the
+   question are candidates: `number_signature` reads digits, number words and
+   ordinals ("3rd", "third" → `3`). Jev 1.13 is weak on numeric precision, and
+   "second violation" vs "third violation" is exactly how near-miss questions
+   differ. With no candidate, nothing is sent.
+3. *Jev.* One `Noul` per candidate, at most 8 per request, keyed by name
+   (`known.k3`): "Would a complete answer to `known.k3` also fully answer the
+   resident's message in `question`?" Both questions are sent as state, never
+   inside the instructions. The best score at or above `CACHE_THRESHOLD`
+   (default 0.9) is a hit.
+
+The lookup runs **alongside the gate**, so a miss adds no latency, and the
+gate must still pass for a hit to be served.
+
+**A miss is always safe.** A score under the threshold, differing numbers, a
+failed lookup request (`cache_error` in the log notes; its billed tokens are
+still counted), or a cache whose `corpus_fingerprint` does not match the
+loaded corpus (ignored with a warning at startup) all fall through to the full
+pipeline. The fingerprint hashes every chunk's id, text, authority, dates,
+citation label and URL, so any change to what an answer could read or cite
+invalidates the cache.
+
+**What a hit returns.** The stored text, citations, confidence and noted
+conflicts, with a fresh `request_id` and the current disclaimer.
+`AskResult.cache_entry` and the log's `cache` field carry the entry id, which
+is the only record of which question was asked.
+
+**The risk is a false hit:** a stored answer is true, but it may answer a
+slightly different question. `evals/cache_cases.yaml` lists paraphrases
+(expect a hit) and near-misses (expect a miss); `hoa-qa cache check` runs the
+matcher over them and exits 1 on any false hit. A missed paraphrase only takes
+the slow path, so it is reported but does not fail. Add a near-miss case for
+every new curated question.
+
+**Building and shipping.** The manual **Answer cache** workflow builds the
+cache against the latest corpus artifact, runs the check, and uploads
+`answer_cache.json` as an artifact. Read it before shipping: whatever the
+pipeline answered that day is what residents will see until the next build.
+Nothing deploys it yet; `vercel.json` already bundles the file if it is
+present next to `corpus.json`.
+
 ## Eval diagnostics
 
 `QAAsker.ask_traced(question, trace)` runs the same pipeline and reports each
@@ -180,6 +239,7 @@ for it, and the golden questions are committed fixtures, not user input.
 | `SWEEP_TOP_K` | `8` | Maximum passages sent to the answer model |
 | `JEV_CONCURRENCY` | `16` | Maximum concurrent Jev requests per `ask()` (sweep and support share one semaphore). `SWEEP_CONCURRENCY` is still read as a fallback. Raised from 4 on 2026-10-09: the sweep is about 100 requests, so at 4 it ran as some 25 rounds one after another. Jev 1.13 allows 80 requests and 100K tokens per second per account, and the sweep is ~190K tokens, so above some value the token rate is the floor and a higher setting only makes the SDK back off. The bound is per question, so simultaneous questions share the account limit. Compare `sweep_ms` in the request log (or `stage p50` in the eval table) before and after changing it. |
 | `SUPPORT_THRESHOLD` | `0.5` | Minimum support probability for a claim |
+| `CACHE_THRESHOLD` | `0.9` | Minimum match probability to serve a stored answer (see "Curated answer cache"). Not yet tuned against the live API |
 | `ANSWER_MAX_TOKENS` | `2048` | Answer-model output cap per call (256–16000). It is part of `max_cost_usd`. Raise it for models with adaptive thinking, since thinking counts against it. |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Link used in refusal / not-found messages |
 
@@ -328,12 +388,14 @@ figures were computed on 2026-09-27 from a `--no-llm` build.
 
 `hoa_qa.ask` logs one structured line per request (also attached as
 `record.hoa_qa`): `request_id`, `outcome`, `latency_ms`, `gate_ms`, `sweep_ms`,
-`answer_ms`, `verify_ms` (wall-clock time per stage; `answer_ms` and `verify_ms`
-add up both attempts when the answer is regenerated, and a stage that never ran
-is 0), `jev_input_tokens`,
+`cache_ms`, `answer_ms`, `verify_ms` (wall-clock time per stage; `answer_ms` and
+`verify_ms` add up both attempts when the answer is regenerated, a stage that
+never ran is 0, and `cache_ms` overlaps `gate_ms` because the two run together),
+`jev_input_tokens`,
 `answer_model`, `answer_calls`, `answer_input_tokens`, `answer_output_tokens`,
 `citations`, `estimated_cost_usd`, `notes` (`invalid_draft`, `no_claims`,
-`claims_failed=N`, `used_first_attempt`), and `reason`.
+`claims_failed=N`, `used_first_attempt`, `cache_hit`, `cache_exact`,
+`cache_error`), `cache` (the curated entry id served, or empty), and `reason`.
 
 Two diagnostics records explain a `not_found`:
 

@@ -37,7 +37,8 @@ SupportFn = Callable[[str, Sequence[str]], float]
 
 @dataclass
 class FakeJev:
-    """Routes by question name: ``on_topic`` (gate), ``p*`` (sweep), ``c*``.
+    """Routes by question name: ``on_topic`` (gate), ``k*`` (cache match),
+    ``p*`` (sweep), ``c*`` (support).
 
     ``support`` is a constant or ``f(statement, cited_chunk_ids)``. ``fail``
     decides, per request, whether to raise instead of answering (unbilled);
@@ -48,6 +49,8 @@ class FakeJev:
     gate: float = 0.95
     relevance: Mapping[str, float] = field(default_factory=dict)
     support: float | SupportFn = 0.9
+    # Cache match score per known (cached) question text; 0 if absent.
+    match: Mapping[str, float] = field(default_factory=dict)
     fail: Callable[[Mapping[str, Any]], bool] = lambda state: False
     malformed: Callable[[Mapping[str, Any]], bool] = lambda state: False
     calls: list[tuple[dict[str, Any], dict[str, NoulQuestion]]] = field(
@@ -68,6 +71,8 @@ class FakeJev:
         for name in questions:
             if name == "on_topic":
                 probabilities[name] = self.gate
+            elif name.startswith("k"):
+                probabilities[name] = self.match.get(state["known"][name], 0.0)
             elif name.startswith("p"):
                 text = state["passages"][name]["text"]
                 probabilities[name] = self.relevance.get(self.text_to_id[text], 0.0)

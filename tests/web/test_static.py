@@ -69,7 +69,7 @@ def test_page_accessibility_and_disclaimer() -> None:
 def test_vercel_json_bundles_corpus_into_entrypoint() -> None:
     config = json.loads((ROOT / "vercel.json").read_text())
     function = config["functions"]["api/index.py"]
-    assert function["includeFiles"] == "corpus.json"
+    assert function["includeFiles"] == "{corpus.json,answer_cache.json}"
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert pyproject["tool"]["vercel"]["entrypoint"] == "api.index:app"
 

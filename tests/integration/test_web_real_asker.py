@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from qa_fakes import FINES_DRAFT, FIXTURE, FakeJev, FakeProvider
@@ -11,6 +12,7 @@ from web_fakes import QUESTION, FixedClock, build_harness
 from hoa_qa import ask as qa
 from hoa_qa.ask import QAAsker, QASettings, build_asker
 from hoa_qa.budget import InMemoryBudgetStore, Reservation
+from hoa_qa.cache import AnswerCache, corpus_fingerprint
 from hoa_qa.models import Answer, Corpus, Outcome, load_corpus, validate_https
 from hoa_qa.web import deps
 from hoa_qa.web.app import reservation_amount
@@ -120,7 +122,10 @@ def test_real_get_asker_builds_qa_asker_from_env(
     """With keys in the app's env, get_asker builds the real QAAsker once."""
     built: list[QASettings] = []
 
-    def fake_build(corpus: Corpus, settings: QASettings) -> QAAsker:
+    def fake_build(
+        corpus: Corpus, settings: QASettings, cache: object = None
+    ) -> QAAsker:
+        assert cache is None, "no answer_cache.json exists in the test directory"
         built.append(settings)
         asker, _, _ = real_asker()
         return asker
@@ -135,3 +140,23 @@ def test_real_get_asker_builds_qa_asker_from_env(
     assert len(built) == 1
     assert built[0].typesafe_api_key is not None
     assert isinstance(h.app.state.asker, QAAsker)
+
+
+def test_answer_cache_is_optional_and_never_fatal(tmp_path: Path) -> None:
+    """A missing or broken cache file means no cache, not a failed start."""
+    assert deps.load_answer_cache(tmp_path / "missing.json") is None
+    broken = tmp_path / "answer_cache.json"
+    broken.write_text("{not json")
+    assert deps.load_answer_cache(broken) is None
+
+    corpus = load_corpus(FIXTURE)
+    cache = AnswerCache(
+        corpus_fingerprint=corpus_fingerprint(corpus),
+        built_at=datetime(2026, 10, 9, tzinfo=UTC),
+        jev_model="jev-1.13.0",
+        answer_model="claude-haiku-4-5",
+        entries=(),
+    )
+    good = tmp_path / "good.json"
+    good.write_text(cache.model_dump_json())
+    assert deps.load_answer_cache(good) == cache
