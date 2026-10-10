@@ -1,4 +1,5 @@
-"""The FastAPI app: ``POST /api/ask``, ``GET /api/health`` and ``GET /documents``.
+"""The FastAPI app: ``POST /api/ask``, ``GET /api/health``, ``GET /documents``,
+and the operator-only ``/api/monitor/*`` (see ``hoa_qa.web.monitor``).
 
 Run locally with ``uv run uvicorn hoa_qa.web.app:app --reload``. On Vercel,
 ``api/index.py`` re-exports ``app``.
@@ -17,12 +18,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from hoa_qa.ask import QASettings
 from hoa_qa.budget import (
     BudgetStore,
     CounterStore,
@@ -34,6 +36,7 @@ from hoa_qa.budget import (
     select_counter_store,
 )
 from hoa_qa.models import Answer, Outcome, validate_https
+from hoa_qa.web import monitor
 from hoa_qa.web.deps import (
     Asker,
     ServiceUnavailable,
@@ -154,6 +157,10 @@ def create_app(
         counter_store, config.rate_limit_per_hour, config.rate_limit_per_day
     )
     app.state.asker = None
+    # The operator monitor: off (and recording nothing) unless a token is set.
+    app.state.monitor_token = monitor.monitor_token(env)
+    app.state.recent_store = counter_store
+    app.state.monitor = None
     app.add_middleware(SecurityHeadersMiddleware)
 
     @app.exception_handler(RequestValidationError)
@@ -260,7 +267,111 @@ def create_app(
             latency_ms,
             cost,
         )
+        if request.app.state.monitor_token is not None:
+            await monitor.record(
+                request.app.state.recent_store,
+                monitor.feed_row(result, latency_ms, cost, operator=False),
+            )
         return answer_response(answer)
+
+    def operator_only(request: Request) -> None:
+        """404, exactly like a route that doesn't exist, without the token."""
+        if not monitor.authorized(request, request.app.state.monitor_token):
+            raise HTTPException(status_code=404)
+
+    def get_monitor(request: Request, settings: WebSettings) -> monitor.Monitor:
+        state = request.app.state
+        if state.monitor is None:
+            state.monitor = monitor.Monitor(
+                load_corpus_once(settings.corpus_path), QASettings.from_env(state.env)
+            )
+        return state.monitor
+
+    @app.get("/api/monitor/config", dependencies=[Depends(operator_only)])
+    async def monitor_config(
+        request: Request,
+        settings: Annotated[WebSettings, Depends(get_settings)],
+    ) -> JSONResponse:
+        return JSONResponse(get_monitor(request, settings).config())
+
+    @app.get("/api/monitor/recent", dependencies=[Depends(operator_only)])
+    async def monitor_recent(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(await monitor.recent(request.app.state.recent_store))
+        except Exception as exc:
+            logger.error("monitor feed read failed error_type=%s", type(exc).__name__)
+            return JSONResponse({"error": "The traffic feed can't be read right now."})
+
+    @app.post("/api/monitor/ask", dependencies=[Depends(operator_only)])
+    async def monitor_ask(
+        body: AskRequest,
+        request: Request,
+        settings: Annotated[WebSettings, Depends(get_settings)],
+        budget_store: Annotated[BudgetStore, Depends(get_budget_store)],
+        asker: Annotated[Asker, Depends(get_asker)],
+    ) -> JSONResponse:
+        """The operator's own question, with the full trace of what happened.
+
+        No per-IP rate limit (the token is the gate), but the budget still
+        applies: this spends real money. The trace is returned, never stored.
+        """
+        if not origin_allowed(request, on_vercel=settings.on_vercel):
+            raise HTTPException(status_code=404)
+        traced = getattr(asker, "ask_traced", None)
+        if traced is None:
+            return JSONResponse({"error": "This asker can't be traced."})
+        request_id = uuid.uuid4().hex
+        try:
+            reservation = await budget_store.reserve(
+                reservation_amount(settings, asker), settings.monthly_budget_usd
+            )
+        except Exception as exc:
+            logger.error(
+                "budget reservation failed request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            reservation = None
+        if reservation is None:
+            return JSONResponse({"error": "This month's budget is used up."})
+        seen = monitor.MonitorRecorder()
+        started = time.perf_counter()
+        try:
+            result = await traced(body.question, seen)
+        except Exception as exc:
+            logger.error(
+                "asker failed request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            await _reconcile(
+                budget_store,
+                reservation,
+                getattr(exc, "estimated_cost_usd", None),
+                request_id,
+            )
+            return JSONResponse(
+                {"error": f"The pipeline failed ({type(exc).__name__})."},
+                status_code=500,
+            )
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        cost = await _reconcile(
+            budget_store, reservation, result.estimated_cost_usd, request_id
+        )
+        logger.info(
+            "monitor ask outcome=%s request_id=%s latency_ms=%d cost_usd=%.6f",
+            result.answer.outcome,
+            request_id,
+            latency_ms,
+            cost,
+        )
+        await monitor.record(
+            request.app.state.recent_store,
+            monitor.feed_row(result, latency_ms, cost, operator=True),
+        )
+        return JSONResponse(
+            get_monitor(request, settings).trace(body.question, result, seen)
+        )
 
     @app.get("/api/health")
     async def health(

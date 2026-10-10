@@ -132,6 +132,7 @@ default".
 | `RATE_LIMIT_PER_DAY` | `50` | web | Per-IP questions per day |
 | `CORPUS_PATH` | `corpus.json` | web | Corpus file, relative to the working directory |
 | `ANSWER_CACHE_PATH` | `answer_cache.json` | web | Optional curated answer cache (`hoa-qa cache build`). Missing, unreadable, or built from another corpus means no cache |
+| `MONITOR_TOKEN` | unset | web | Turns on the operator monitor at `/monitor.html` (docs/web-ops.md). Treat it like an API key |
 | `HOA_QA_FAKE_ASKER` | unset | web | `1` = canned dev answers; ignored in production |
 | `TYPESAFE_LOG_LEVEL`, `ANTHROPIC_LOG` | unset | web | Never `debug` in production (the SDKs would log questions); the app refuses to start |
 | `VERCEL`, `VERCEL_ENV` | set by Vercel | web | `VERCEL=1` trusts `x-forwarded-for`; `VERCEL_ENV=production` enables the fail-closed rules |

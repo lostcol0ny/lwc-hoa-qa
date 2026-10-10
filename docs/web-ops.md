@@ -88,6 +88,7 @@ the same way:
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Document link for budget-exhausted answers and the page; the same variable the QA core uses for refusals. Must be `https://` |
 | `CORPUS_PATH` | `corpus.json` | Corpus location |
 | `ANSWER_CACHE_PATH` | `answer_cache.json` | Optional curated answer cache. A missing or unreadable file is not an error |
+| `MONITOR_TOKEN` | unset | Turns on the operator monitor (see "Operator monitor"). At least 24 characters; unset or shorter means off |
 | `HOA_QA_FAKE_ASKER` | unset | `1` = canned dev answers (ignored in production) |
 | `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`, `ANSWER_MODEL`, ... | | Read by the QA core's `QASettings`, not by the web layer |
 | `VERCEL`, `VERCEL_ENV` | set by Vercel | `VERCEL=1` enables trusting `x-forwarded-for`; `VERCEL_ENV=production` enables the fail-closed rules below |
@@ -195,6 +196,40 @@ Consequences:
 | Upstash errors while reconciling | The answer is returned and the full reservation stays counted; the error type and request ID are logged |
 | Upstash errors in the rate limiter | The request is allowed (fail open); see below |
 | Preview deployments without Upstash | In-memory counters (per function instance) |
+
+## Operator monitor
+
+`/monitor.html` is a page for the operator, off unless `MONITOR_TOKEN` is set.
+It does two things:
+
+- **Trace your own question.** `POST /api/monitor/ask` runs the real pipeline
+  and returns everything it did: the gate and cache scores, every sweep
+  request's plan and the best scores, the passages sent to the answer model,
+  each claim and each check, timings, tokens and cost. The page replays it
+  stage by stage. The trace is returned to you and never stored or logged.
+- **Recent traffic.** `GET /api/monitor/recent` lists the last 200 answered
+  requests (kept 7 days in the same store as the budget counters): time,
+  outcome, per-stage timings, the curated cache entry served, tokens and cost.
+  No question, answer, quote or IP address is ever recorded, so the privacy
+  rule in docs/qa-core.md holds. With the monitor off, nothing is recorded.
+
+**Turning it on.** Generate a token (`openssl rand -hex 32`), set it as
+`MONITOR_TOKEN` in Vercel for Production, and re-run the Deploy workflow (not
+Vercel's Redeploy button, which builds without the corpus). Open
+`/monitor.html` and paste the token; it is kept in that browser tab's
+`sessionStorage` only. To revoke access, change or remove the variable and
+deploy again.
+
+**How it is protected.**
+
+- Every `/api/monitor/*` route returns the same 404 as an unknown route unless
+  the `X-Monitor-Token` header matches, compared in constant time. A token
+  shorter than 24 characters is ignored and the monitor stays off.
+- The page itself is a static file with no data in it; anyone can load it and
+  see a token prompt. Nothing is served without the token.
+- A traced question skips the per-IP rate limit (the token is the gate) but
+  still reserves and spends from the monthly budget.
+- The trace exposes the prompts and scores. Treat the token like an API key.
 
 ## Rate limiting
 
