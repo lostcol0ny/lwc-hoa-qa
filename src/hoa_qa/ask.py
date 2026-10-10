@@ -562,6 +562,7 @@ class QAAsker:
             # A curated question, word for word: there is nothing to judge.
             usage.cache_entry = exact.id
             usage.notes.append("cache_exact")
+            trace.cache(exact, 1.0, 1, exact=True)
             return _cached(exact)
         # The lookup runs alongside the gate, so a miss adds no latency.
         looking = asyncio.ensure_future(self._lookup(cleaned, usage, limit, request_id))
@@ -573,6 +574,8 @@ class QAAsker:
             found = await looking
         usage.jev_input_tokens += gate.input_tokens
         trace.gate(gate.probability, gate.passed)
+        if self._cache_entries:
+            trace.cache(found.entry, found.probability, found.candidates, exact=False)
         if not gate.passed:
             return _Result(
                 Outcome.refused_off_topic,

@@ -122,6 +122,7 @@ class FakeUpstash:
 
     def __init__(self) -> None:
         self.data: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
         self.ttls: dict[str, int] = {}
         self.requests: list[tuple[str, object, str | None]] = []
         self.fail_writes = False
@@ -142,6 +143,14 @@ class FakeUpstash:
         if name == "EXPIRE":
             self.ttls[key] = int(args[0])
             return 1
+        if name == "LPUSH":
+            self.lists.setdefault(key, []).insert(0, args[0])
+            return len(self.lists[key])
+        if name == "LTRIM":
+            self.lists[key] = self.lists.get(key, [])[int(args[0]) : int(args[1]) + 1]
+            return "OK"
+        if name == "LRANGE":
+            return self.lists.get(key, [])[int(args[0]) : int(args[1]) + 1]
         raise AssertionError(f"unexpected command {name}")
 
     def eval(self, command: list) -> object:

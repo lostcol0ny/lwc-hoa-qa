@@ -102,6 +102,20 @@ class CounterStore(Protocol):
         ...
 
 
+class RecentStore(Protocol):
+    """A short rolling list, newest first, for the operator monitor's feed.
+
+    Both counter stores implement it. It is separate from ``CounterStore`` so
+    budget and rate-limit test doubles don't have to.
+    """
+
+    async def push_recent(
+        self, key: str, value: str, keep: int, ttl_seconds: int
+    ) -> None: ...
+
+    async def recent(self, key: str, count: int) -> list[str]: ...
+
+
 @dataclass(frozen=True)
 class Reservation:
     """Spend held for one in-flight request, pinned to the month it was made in."""
@@ -133,6 +147,7 @@ class InMemoryCounterStore:
 
     def __init__(self, monotonic: Callable[[], float] = time.monotonic) -> None:
         self._values: dict[str, tuple[int, float]] = {}
+        self._lists: dict[str, tuple[list[str], float]] = {}
         self._monotonic = monotonic
         self._lock = asyncio.Lock()
 
@@ -159,6 +174,20 @@ class InMemoryCounterStore:
             if current + amount > limit:
                 return None
             return self._add(key, amount, ttl_seconds, base=current)
+
+    async def push_recent(
+        self, key: str, value: str, keep: int, ttl_seconds: int
+    ) -> None:
+        async with self._lock:
+            items, _ = self._lists.get(key, ([], 0.0))
+            self._lists[key] = (
+                [value, *items][:keep],
+                self._monotonic() + ttl_seconds,
+            )
+
+    async def recent(self, key: str, count: int) -> list[str]:
+        items, expires = self._lists.get(key, ([], 0.0))
+        return list(items[:count]) if expires > self._monotonic() else []
 
     def _add(
         self, key: str, amount: int, ttl_seconds: int, *, base: int | None = None
@@ -266,6 +295,30 @@ class UpstashCounterStore:
             raise UpstashError("unexpected EVAL response shape")
         total = _to_int(result[1])
         return total if result[0] == 1 else None
+
+    async def push_recent(
+        self, key: str, value: str, keep: int, ttl_seconds: int
+    ) -> None:
+        """Prepend ``value`` to a list capped at ``keep`` items, as one transaction."""
+        payload = await self._post(
+            "/multi-exec",
+            [
+                ["LPUSH", key, value],
+                ["LTRIM", key, "0", str(keep - 1)],
+                ["EXPIRE", key, str(ttl_seconds)],
+            ],
+        )
+        if not isinstance(payload, list) or any(
+            not isinstance(item, dict) or "error" in item for item in payload
+        ):
+            raise UpstashError("multi-exec command failed")
+
+    async def recent(self, key: str, count: int) -> list[str]:
+        payload = await self._post("", ["LRANGE", key, "0", str(count - 1)])
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, list):
+            raise UpstashError("unexpected LRANGE response shape")
+        return [item for item in result if isinstance(item, str)]
 
     async def aclose(self) -> None:
         await self._client.aclose()

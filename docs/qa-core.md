@@ -428,6 +428,11 @@ Two diagnostics records explain a `not_found`:
   `statement_chars`. A cited `chunk_id` that names no provided passage is
   logged as `?`, since the model writes that field.
 
+When the operator monitor is on (docs/web-ops.md), the web layer also keeps a
+rolling feed of the same kind of numbers and codes for the last 200 requests,
+for 7 days. It holds no text either. A question the operator traces through
+the monitor is returned to them in full and is not stored.
+
 None of these logs question, answer, claim, or quote text (spec §6), and
 tests assert this.
 

@@ -24,6 +24,7 @@ from typing import Annotated, Any, Self
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from hoa_qa.ask import Asker, AskResult
+from hoa_qa.cache import CacheEntry
 from hoa_qa.models import Answer, Chunk, Corpus, Outcome
 from hoa_qa.retrieval.sweep import ScoredChunk
 from hoa_qa.trace import AskTrace, ClaimTrace
@@ -167,6 +168,17 @@ class DiagnosticsRecorder:
     def gate(self, probability: float, passed: bool) -> None:
         self.data.gate_score = probability
         self.data.gate_passed = passed
+
+    def cache(
+        self,
+        entry: CacheEntry | None,
+        probability: float | None,
+        candidates: int,
+        *,
+        exact: bool,
+    ) -> None:
+        # The eval runs without a cache, so there is nothing to record.
+        pass
 
     def sweep(
         self, scores: Sequence[ScoredChunk], selected: Sequence[ScoredChunk]

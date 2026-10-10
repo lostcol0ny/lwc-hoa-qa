@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from hoa_qa.cache import CacheEntry
 from hoa_qa.models import Authority, Chunk
 from hoa_qa.retrieval.sweep import ScoredChunk
 
@@ -39,6 +40,19 @@ class ClaimTrace:
 class AskTrace(Protocol):
     def gate(self, probability: float, passed: bool) -> None: ...
 
+    def cache(
+        self,
+        entry: CacheEntry | None,
+        probability: float | None,
+        candidates: int,
+        *,
+        exact: bool,
+    ) -> None:
+        """The curated-cache lookup: ``entry`` is the stored answer served, or
+        None on a miss. ``exact`` means the question was a curated one word
+        for word, so nothing was judged. Not called when no cache is loaded."""
+        ...
+
     def sweep(
         self, scores: Sequence[ScoredChunk], selected: Sequence[ScoredChunk]
     ) -> None: ...
@@ -62,6 +76,16 @@ class NoTrace:
     """The default: records nothing."""
 
     def gate(self, probability: float, passed: bool) -> None:
+        pass
+
+    def cache(
+        self,
+        entry: CacheEntry | None,
+        probability: float | None,
+        candidates: int,
+        *,
+        exact: bool,
+    ) -> None:
         pass
 
     def sweep(

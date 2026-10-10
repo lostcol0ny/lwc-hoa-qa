@@ -120,3 +120,36 @@ def test_local_analytics_script_missing_does_not_affect_assets(harness) -> None:
     assert harness.client.get("/_vercel/insights/script.js").status_code == 404
     for path in ("/", "/app.js", "/analytics.js"):
         assert harness.client.get(path).status_code == 200
+
+
+def test_monitor_page_obeys_the_same_csp_as_the_public_page() -> None:
+    """No inline or third-party script or style, and no HTML built from strings:
+    the trace it renders contains passage and answer text."""
+    html = (PUBLIC / "monitor.html").read_text()
+    assert re.findall(r"<script[^>]*>", html) == ['<script src="/monitor.js" defer>']
+    assert re.findall(r"<link[^>]*>", html) == [
+        '<link rel="stylesheet" href="/monitor.css">'
+    ]
+    assert "<style" not in html and " style=" not in html and " onclick=" not in html
+    assert '<meta name="robots" content="noindex">' in html
+    source = (PUBLIC / "monitor.js").read_text()
+    banned = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(")
+    for name in banned:
+        assert name not in source
+    # Inline style attributes are blocked by the CSP; the CSSOM is not.
+    assert 'setAttribute("style"' not in source
+    css = (PUBLIC / "monitor.css").read_text()
+    assert "@import" not in css and "url(" not in css
+
+
+def test_monitor_page_keeps_the_token_out_of_urls_and_long_term_storage() -> None:
+    source = (PUBLIC / "monitor.js").read_text()
+    assert "localStorage" not in source and "sessionStorage" in source
+    assert "location.search" not in source and "location.hash" not in source
+    # Sent as a header on same-origin requests only.
+    assert '"x-monitor-token": token' in source
+    assert re.findall(r'api\("([^"]+)"', source) == [
+        "/api/monitor/config",
+        "/api/monitor/ask",
+        "/api/monitor/recent",
+    ]

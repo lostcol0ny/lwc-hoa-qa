@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d0d0f">
+  <meta name="robots" content="noindex">
+  <title>Pipeline monitor · Lakewood Creek HOA Q&amp;A</title>
+  <link rel="stylesheet" href="/monitor.css">
+  <script src="/monitor.js" defer></script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Pipeline monitor</h1>
+      <p class="lede">Ask a question and watch each stage handle it, then see how the site is being used. Operator only.</p>
+    </header>
+
+    <form id="unlock" class="unlock" hidden>
+      <label for="token">Operator token</label>
+      <div class="row">
+        <input id="token" type="password" autocomplete="off" spellcheck="false" required>
+        <button class="btn primary" type="submit">Unlock</button>
+      </div>
+      <p id="unlock-note" class="note">The token is the MONITOR_TOKEN set in Vercel. It is kept for this browser tab only.</p>
+    </form>
+
+    <main id="app" hidden>
+      <form id="ask" class="ask">
+        <label for="question" class="visually-hidden">Question to trace</label>
+        <textarea id="question" rows="2" maxlength="500" required
+          placeholder="Ask something a resident might ask…"></textarea>
+        <div class="row">
+          <button class="btn primary" id="ask-button" type="submit">Ask and trace</button>
+          <button class="btn" id="play" type="button" disabled>Play</button>
+          <select id="history" aria-label="Questions asked this session" hidden></select>
+          <span id="ask-status" class="note" role="status" aria-live="polite"></span>
+        </div>
+        <p class="note">This runs the real pipeline and spends real money (about 2 cents, or a fraction of a cent on a cache hit). Your question is shown to you here and is not stored.</p>
+      </form>
+
+      <div id="asked" class="asked" hidden></div>
+      <nav id="track" class="track" aria-label="Pipeline stages" hidden></nav>
+      <div id="timing" class="timing" hidden></div>
+      <section id="panel" class="panel" aria-live="polite" hidden></section>
+
+      <section class="feed" aria-labelledby="feed-title">
+        <div class="panel-head">
+          <h2 id="feed-title">Recent traffic</h2>
+          <button class="btn" id="refresh" type="button">Refresh</button>
+          <p id="feed-summary" class="note"></p>
+        </div>
+        <div class="table-scroll">
+          <table id="feed">
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Outcome</th>
+                <th scope="col" class="num">Total</th>
+                <th scope="col">Where the time went</th>
+                <th scope="col">Cached answer</th>
+                <th scope="col" class="num">Cost</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="note">One row per answered request, numbers and codes only. No question, answer or address is ever recorded.</p>
+      </section>
+    </main>
+
+    <footer id="foot" class="note"></footer>
+  </div>
+</body>
+</html>
