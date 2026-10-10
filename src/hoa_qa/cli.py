@@ -8,6 +8,8 @@
   answers; draft any question that has none yet)
 - ``hoa-qa cache check evals/cache_cases.yaml --cache build/answer_cache.json``
   (does the matcher hit the paraphrases and miss the near-misses?)
+- ``hoa-qa cache verify --cache answer_cache.json --corpus corpus.json`` (was
+  the cache built from this corpus? no API calls)
 """
 
 import argparse
@@ -104,6 +106,11 @@ def _parser() -> argparse.ArgumentParser:
     check = actions.add_parser("check", help="Score the matcher on known pairs")
     check.add_argument("cases", nargs="?", type=Path, default=DEFAULT_MATCH_CASES_PATH)
     check.add_argument("--cache", required=True, type=Path)
+    verify = actions.add_parser(
+        "verify", help="Exit 0 if the cache was built from this corpus (no API calls)"
+    )
+    verify.add_argument("--cache", required=True, type=Path)
+    verify.add_argument("--corpus", required=True, type=Path)
     return parser
 
 
@@ -163,6 +170,23 @@ def _run_cache_build(args: argparse.Namespace, factory: AskerFactory) -> int:
         # Reviewed wording that no longer verifies needs a person to look.
         print(f"reviewed answers failed verification: {rejected}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _run_cache_verify(args: argparse.Namespace) -> int:
+    """Would the app use this cache with this corpus? The deploy asks this."""
+    try:
+        cache = load_cache(args.cache)
+        corpus = load_corpus(args.corpus)
+    except (OSError, ValueError) as exc:
+        # The type only: a validation message can echo file contents.
+        print(f"hoa-qa: cache unusable ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    if cache.corpus_fingerprint != corpus_fingerprint(corpus):
+        print("hoa-qa: cache was built from a different corpus", file=sys.stderr)
+        return 1
+    built = cache.built_at.date().isoformat()
+    print(f"answer cache ok: {len(cache.entries)} entries, built {built}")
     return 0
 
 
@@ -314,6 +338,8 @@ def main(
     if args.command == "cache":
         if args.cache_command == "build":
             return _run_cache_build(args, asker_factory)
+        if args.cache_command == "verify":
+            return _run_cache_verify(args)
         return _run_cache_check(args, jev_factory)
     if args.command == "eval":
         return _run_eval_command(args, asker_factory)

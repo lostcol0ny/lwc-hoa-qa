@@ -63,7 +63,9 @@ QuestionText = Annotated[
 
 class ReviewedCitation(Model):
     chunk_id: str = Field(min_length=1)
-    quote: str = Field(min_length=1)
+    # Long enough to identify a passage: the answer model once cited the
+    # single character "3", which is "found" in almost any text.
+    quote: str = Field(min_length=8)
 
 
 class ReviewedClaim(Model):

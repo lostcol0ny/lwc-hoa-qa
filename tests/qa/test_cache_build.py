@@ -11,7 +11,7 @@ from hoa_qa.ask import AskResult, QAAsker, QASettings, build_asker
 from hoa_qa.cache import CuratedQuestions, load_cache, load_questions
 from hoa_qa.cache_build import build_entries, with_claims
 from hoa_qa.cli import main
-from hoa_qa.models import Answer, Corpus, Outcome
+from hoa_qa.models import Answer, Corpus, Outcome, load_corpus
 
 FINE_QUESTION = "What is the fine for a third violation?"
 FINE = {
@@ -83,12 +83,22 @@ def test_reviewed_claim_may_cite_a_passage_the_sweep_did_not_select(
     ("claim", "support", "problem"),
     [
         (
-            {**FINE, "citations": [{"chunk_id": "rules-2023-fines", "quote": "$999"}]},
+            {
+                **FINE,
+                "citations": [
+                    {"chunk_id": "rules-2023-fines", "quote": "4th violation: $999."}
+                ],
+            },
             0.9,
             "claim 1: no_valid_quote",
         ),
         (
-            {**FINE, "citations": [{"chunk_id": "no-such-chunk", "quote": "$125"}]},
+            {
+                **FINE,
+                "citations": [
+                    {"chunk_id": "no-such-chunk", "quote": "3rd violation: $125."}
+                ],
+            },
             0.9,
             "claim 1: no_valid_quote",
         ),
@@ -129,7 +139,10 @@ def test_one_failed_claim_rejects_the_whole_reviewed_answer(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
     """Unlike a model draft, reviewed text is never served with a piece missing."""
-    bad = {**OLD_FINE, "citations": [{"chunk_id": "rules-2016-fines", "quote": "nope"}]}
+    bad = {
+        **OLD_FINE,
+        "citations": [{"chunk_id": "rules-2016-fines", "quote": "3rd offense: $999."}],
+    }
     entries, rows = build(corpus, settings, jev, questions(FINE, bad))
     assert entries == ()
     assert rows[0].problems == ("claim 2: no_valid_quote",)
@@ -241,7 +254,12 @@ def test_cli_writes_a_proposal_that_loads_and_rebuilds(
 def test_cli_fails_when_reviewed_wording_no_longer_verifies(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    stale = {**FINE, "citations": [{"chunk_id": "rules-2023-fines", "quote": "$130"}]}
+    stale = {
+        **FINE,
+        "citations": [
+            {"chunk_id": "rules-2023-fines", "quote": "3rd violation: $130."}
+        ],
+    }
     curated = {
         "questions": [
             {"id": "fine-third", "question": FINE_QUESTION},
@@ -255,3 +273,36 @@ def test_cli_fails_when_reviewed_wording_no_longer_verifies(
     assert "reviewed answers failed verification: ['stale']" in captured.err
     # The answers that did verify are still written, for inspection.
     assert [e.id for e in load_cache(out).entries] == ["fine-third"]
+
+
+def test_cli_verify_accepts_only_a_cache_built_from_this_corpus(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    curated = {"questions": [{"id": "fine-third", "question": FINE_QUESTION}]}
+    _, cache_path = run_build(tmp_path, curated)
+    capsys.readouterr()
+    verify = ["cache", "verify", "--cache", str(cache_path), "--corpus"]
+    assert main([*verify, str(FIXTURE)]) == 0
+    assert "answer cache ok: 1 entries" in capsys.readouterr().out
+
+    corpus = load_corpus(FIXTURE)
+    first = corpus.chunks[0]
+    edited = first.model_copy(update={"text_clean": first.text_clean + " Changed."})
+    other = tmp_path / "other_corpus.json"
+    other.write_text(
+        corpus.model_copy(
+            update={"chunks": (edited, *corpus.chunks[1:])}
+        ).model_dump_json()
+    )
+    assert main([*verify, str(other)]) == 1
+    assert "different corpus" in capsys.readouterr().err
+
+    cache_path.write_text("{broken")
+    assert main([*verify, str(FIXTURE)]) == 1
+    assert main([*verify[:-1], "--corpus", str(tmp_path / "missing.json")]) == 1
+
+
+def test_reviewed_quote_must_be_long_enough_to_mean_something() -> None:
+    short = {**FINE, "citations": [{"chunk_id": "rules-2023-fines", "quote": "3"}]}
+    with pytest.raises(ValueError, match="at least 8 characters"):
+        questions(short)

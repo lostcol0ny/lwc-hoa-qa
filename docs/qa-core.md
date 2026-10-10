@@ -217,8 +217,14 @@ every new curated question.
 **Building and shipping.** The manual **Answer cache** workflow builds the
 cache against the latest corpus artifact, runs the check, and uploads
 `answer_cache.json` and `proposed_questions.yaml` as artifacts.
-Nothing deploys it yet; `vercel.json` already bundles the file if it is
-present next to `corpus.json`.
+The deploy workflow then picks up the cache from the latest **successful
+Answer cache run on main** (never a branch run), keeps it only if
+`hoa-qa cache verify` confirms it was built from the corpus being deployed,
+and otherwise deploys without one. A run fails, and so is never deployed, if
+a reviewed answer stops verifying or the matcher produces a false hit.
+Artifacts expire after 30 days, so re-run the workflow after each corpus
+build and at least monthly; to ship a freshly built cache without another
+commit, re-run the latest Deploy run on main.
 
 ## Eval diagnostics
 

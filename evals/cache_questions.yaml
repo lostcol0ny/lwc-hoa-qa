@@ -22,143 +22,495 @@
 #
 # No individuals' names belong in this file.
 questions:
-  - id: dues-current
-    question: How much are the HOA dues this year?
-  - id: dues-history
-    question: How have the annual HOA dues changed over the years?
-    claims:
-      - statement: >-
-          The Declaration capped the annual assessment at $326.00 per Unit
-          until the calendar year beginning January 1, 2002.
-        citations:
-          - chunk_id: declaration-8.4
-            quote: >-
-              until the calendar year beginning January 1, 2002, the annual
-              assessment shall be not more than Three Hundred Twenty-Six and
-              00/100 ($326.00) per Unit
-      - statement: >-
-          From January 1, 2002 on, the Declaration allows the annual
-          assessment to be increased each year, either by a vote of the Owners
-          or by action of the Board without a vote of the Owners.
-        citations:
-          - chunk_id: declaration-8.4
-            quote: the annual assessment may be increased by vote of the Owners of the Association
-          - chunk_id: declaration-8.4
-            quote: by action of the Board and without the necessity for a vote of the Owners
-      - statement: >-
-          Board meeting minutes from December 29, 2022 record a proposed 2023
-          budget with an increase of $5.00 per quarter, an assessment of $99
-          per quarter, and an approved motion to adopt the 2023 budget.
-        citations:
-          - chunk_id: minutes-2022-12-29-meeting
-            quote: Proposed 2023 budget, increase of $5.00 per quarter. Assessment $99 per quarter
-          - chunk_id: minutes-2022-12-29-meeting
-            quote: Vote to adopt 2023 budget.
-      - statement: >-
-          The HOA website lists the 2026 assessment as $452 per year or $113
-          per quarter.
-        citations:
-          - chunk_id: home-1
-            quote: "2026 Assessment Prices: $452 year or $113 per quarter"
-  - id: fine-second-violation
-    question: Under the current rules, what is the fine for a second violation?
-  - id: fine-third-violation
-    question: What is the fine for a third violation of the rules?
-  - id: fine-continuing-violation
-    question: If a violation keeps going after the fines start, is there a daily fine?
-    claims:
-      - statement: >-
-          Yes. Under the current Rules' fining schedule, the fourth and each
-          subsequent violation is fined daily, at $75 per day.
-        citations:
-          - chunk_id: rules-2023-3.B
-            quote: 4th and subsequent - fined daily@ $75 per day
-      - statement: >-
-          The earlier steps in that schedule are a courtesy letter for the
-          first violation, $75 for the second, and $125 for the third.
-        citations:
-          - chunk_id: rules-2023-3.B
-            quote: 1st The courtesy letter 2nd - $75 3rd - $125
-  - id: holiday-lights
-    question: When can holiday lights go up, and when do they have to come down?
-    claims:
-      - statement: >-
-          The Declaration and the current Rules both limit holiday decorative
-          lights to the period between December 1st and January 10th.
-        citations:
-          - chunk_id: rules-2023-2.9
-            quote: >-
-              decorative lights may only be displayed between December 1st and
-              January 10th, as provided in the Declaration
-          - chunk_id: declaration-5.8
-            quote: Seasonal holiday decorative lights may be displayed between December first
-      - statement: >-
-          Under the current Rules, decorative items other than lights may be
-          displayed between the day after Thanksgiving and the end of January,
-          weather permitting.
-        citations:
-          - chunk_id: rules-2023-2.9
-            quote: >-
-              decorative items may also be displayed between the day after
-              Thanksgiving and the end of January (weather permitting)
-      - statement: >-
-          Gutter light hooks may be left attached to gutters, but the lights
-          themselves may not be left attached and must be removed.
-        citations:
-          - chunk_id: rules-2023-2.9
-            quote: >-
-              Gutter light hooks may be left attached to gutters and are not in
-              violation, but lights may not be left attached to gutters and
-              must be removed.
-  - id: pool-guests
-    question: How many guests can I bring to the pool?
-  - id: pool-unpaid-dues
-    question: Can I use the pool if I'm behind on my HOA assessments?
-  - id: satellite-dish
-    question: What is the largest satellite dish I'm allowed to install?
-  - id: quiet-hours
-    question: What are the quiet hours in the neighborhood?
-    claims:
-      - statement: >-
-          The current Rules say loud noises from television, stereo equipment,
-          musical instruments, pets and other disturbances should be avoided
-          at all times.
-        citations:
-          - chunk_id: rules-2023-2.2
-            quote: >-
-              Loud noises from television, stereo equipment, musical
-              instruments, annoying pets and other disturbances should be
-              avoided at all times
-      - statement: >-
-          The Rules single out the hours from 10 p.m. on weekdays, or 11 p.m.
-          on weekends, until 8 a.m.
-        citations:
-          - chunk_id: rules-2023-2.2
-            quote: especially between the hours of 10 p.m. on weekdays and 1 1p.m on weekends and 8 a.m.
-      - statement: >-
-          A homeowner disturbed by a loud noise should first try to notify
-          the person causing it, or contact local law enforcement if speaking
-          to them seems likely to lead to an altercation.
-        citations:
-          - chunk_id: rules-2023-2.2
-            quote: s/he should first attempt to notify the disturbing party
-  - id: arch-approval-fence-shed
-    question: How do I get approval to put up a fence or a shed?
-  - id: arch-unapproved-work
-    question: What happens if I change my home's exterior without architectural approval?
-  - id: clubhouse-deposit
-    question: How much is the security deposit to rent the clubhouse?
-  - id: tennis-courts
-    question: Are the tennis courts being torn down?
-  - id: membership-loss-vote
-    question: Did the HOA vote to take away membership rights for unpaid assessments?
-  - id: governance-board
-    question: Who runs the HOA and makes decisions for it?
-  - id: records-inspection
-    question: Can I inspect the Association's financial records?
-  - id: cicaa-applies
-    question: Does the Common Interest Community Association Act apply to Lakewood Creek?
-  - id: director-removal
-    question: How can a director be removed from the Board?
-  - id: board-meeting-frequency
-    question: How often must the Board of Directors meet?
+- id: dues-current
+  question: How much are the HOA dues this year?
+  claims:
+  - statement: As of 2026, the HOA assessment is $452 per year or $113 per quarter, with payments
+      due January 1, April 1, July 1, and October 1.
+    citations:
+    - chunk_id: home-1
+      quote: '2026 Assessment Prices: $452 year or $113 per quarter: Jan 1, April 1, July
+        1, Oct 1'
+- id: dues-history
+  question: How have the annual HOA dues changed over the years?
+  claims:
+  - statement: The Declaration capped the annual assessment at $326.00 per Unit until the
+      calendar year beginning January 1, 2002.
+    citations:
+    - chunk_id: declaration-8.4
+      quote: until the calendar year beginning January 1, 2002, the annual assessment shall
+        be not more than Three Hundred Twenty-Six and 00/100 ($326.00) per Unit
+  - statement: From January 1, 2002 on, the Declaration allows the annual assessment to be
+      increased each year, either by a vote of the Owners or by action of the Board without
+      a vote of the Owners.
+    citations:
+    - chunk_id: declaration-8.4
+      quote: the annual assessment may be increased by vote of the Owners of the Association
+    - chunk_id: declaration-8.4
+      quote: by action of the Board and without the necessity for a vote of the Owners
+  - statement: Board meeting minutes from December 29, 2022 record a proposed 2023 budget
+      with an increase of $5.00 per quarter, an assessment of $99 per quarter, and an approved
+      motion to adopt the 2023 budget.
+    citations:
+    - chunk_id: minutes-2022-12-29-meeting
+      quote: Proposed 2023 budget, increase of $5.00 per quarter. Assessment $99 per quarter
+    - chunk_id: minutes-2022-12-29-meeting
+      quote: Vote to adopt 2023 budget.
+  - statement: The HOA website lists the 2026 assessment as $452 per year or $113 per quarter.
+    citations:
+    - chunk_id: home-1
+      quote: '2026 Assessment Prices: $452 year or $113 per quarter'
+- id: fine-second-violation
+  question: Under the current rules, what is the fine for a second violation?
+  claims:
+  - statement: Under the current Rules, the fine for a second violation is $75.
+    citations:
+    - chunk_id: rules-2023-3.B
+      quote: 2nd - $75
+- id: fine-third-violation
+  question: What is the fine for a third violation of the rules?
+  claims:
+  - statement: Under the current Rules, the fine for a third violation is $125.
+    citations:
+    - chunk_id: rules-2023-3.B
+      quote: 3rd - $125
+- id: fine-continuing-violation
+  question: If a violation keeps going after the fines start, is there a daily fine?
+  claims:
+  - statement: Yes. Under the current Rules' fining schedule, the fourth and each subsequent
+      violation is fined daily, at $75 per day.
+    citations:
+    - chunk_id: rules-2023-3.B
+      quote: 4th and subsequent - fined daily@ $75 per day
+  - statement: The earlier steps in that schedule are a courtesy letter for the first violation,
+      $75 for the second, and $125 for the third.
+    citations:
+    - chunk_id: rules-2023-3.B
+      quote: 1st The courtesy letter 2nd - $75 3rd - $125
+- id: holiday-lights
+  question: When can holiday lights go up, and when do they have to come down?
+  claims:
+  - statement: The Declaration and the current Rules both limit holiday decorative lights
+      to the period between December 1st and January 10th.
+    citations:
+    - chunk_id: rules-2023-2.9
+      quote: decorative lights may only be displayed between December 1st and January 10th,
+        as provided in the Declaration
+    - chunk_id: declaration-5.8
+      quote: Seasonal holiday decorative lights may be displayed between December first
+  - statement: Under the current Rules, decorative items other than lights may be displayed
+      between the day after Thanksgiving and the end of January, weather permitting.
+    citations:
+    - chunk_id: rules-2023-2.9
+      quote: decorative items may also be displayed between the day after Thanksgiving and
+        the end of January (weather permitting)
+  - statement: Gutter light hooks may be left attached to gutters, but the lights themselves
+      may not be left attached and must be removed.
+    citations:
+    - chunk_id: rules-2023-2.9
+      quote: Gutter light hooks may be left attached to gutters and are not in violation,
+        but lights may not be left attached to gutters and must be removed.
+- id: pool-guests
+  question: How many guests can I bring to the pool?
+  claims:
+  - statement: Each Owner may bring up to two guests on their pass, and two homeowners can
+      bring two guests each, for a total of four guests per household regardless of the number
+      of Owners.
+    citations:
+    - chunk_id: rules-2023-2.14-a
+      quote: Each individual Owner may bring up to two (2) guests per their pass, two homeowners
+        can bring (2) guests each to the pool. Guests shall be limited to a total of four
+        (4) per household are permitted regardless of the number of Owners.
+  - statement: Homeowners must sign in guests at the time of entry to the pool, and no additional
+      guests can be added after that time.
+    citations:
+    - chunk_id: rules-2023-2.14-a
+      quote: Homeowner must sign in guests at the time of entry to the pool. NO additional
+        guests can be added after that time.
+- id: pool-unpaid-dues
+  question: Can I use the pool if I'm behind on my HOA assessments?
+  claims:
+  - statement: Owners delinquent by more than thirty days on HOA assessments are prohibited
+      from using the pool until all sums due are paid in full.
+    citations:
+    - chunk_id: rules-2023-2.13
+      quote: Owners who are delinquent by more than thirty (30) days on the payment of any
+        assessments or other charges or amounts owed to the Association shall be prohibited
+        from using the clubhouse, and pool on the Property until all such sums due and owing
+        to the Association are paid in full.
+  - statement: The Declaration states that the Association may deny delinquent Owners use
+      of Common Areas and Common Facilities (except ingress and egress to their Unit) until
+      delinquent assessments and related costs are paid.
+    citations:
+    - chunk_id: declaration-8.10-a
+      quote: the Association may deny to the delinquent Owner the use and enjoyment of any
+        of the Common Areas and Common Facilities except the right to use for ingress and
+        egtess to and fiom the Owner's Unit (which right shall be perpetual and pass with
+        the conveyance of each Unit), until the delinquent contribution assessment or installment
+        is paid, together with any interest, costs and other sums set forth above which the
+        Association is entitled to receive.
+- id: satellite-dish
+  question: What is the largest satellite dish I'm allowed to install?
+  claims:
+  - statement: The current Rules permit an owner to install a satellite dish not to exceed
+      39 inches in diameter.
+    citations:
+    - chunk_id: rules-2023-2.1
+      quote: An Owner may install a satellite dish and/or internet Antenna, not to exceed
+        39" (thirty-nine inches) in diameter
+  - statement: The Declaration permits satellite dishes larger than 30 inches in diameter
+      only if placed solely within the interior of a building on a Unit.
+    citations:
+    - chunk_id: declaration-5.3
+      quote: no antennas, aerials, satellite dishes larger than thirty (30) inches in diameter,
+        or other apparatus for the transmission and receipt of television, radio, or other
+        signals of any kind shall be placed, allowed, or maintained upon any portion of a
+        Unit which is not located solely within the interior of the building located on a
+        Unit
+  - statement: The Declaration permits satellite dishes 30 inches or less with prior Review
+      Committee approval if not attached to the exterior of a building and appropriately screened.
+    citations:
+    - chunk_id: declaration-5.3
+      quote: With the prior approval of the RC, satellite dishes 30 inches or less may be
+        installed within the Properties so long as not attached to the exterior of a building
+        located on a Unit and are appropriately screened from view as determined by the RC
+  - statement: The current Rules require satellite dishes to be placed behind the home or
+      on the rear roof out of public view, or at the closest point to the home if signal mandates
+      public placement, hidden as much as possible by plants or foliage.
+    citations:
+    - chunk_id: rules-2023-2.1
+      quote: A satellite dish should be placed behind the home or on the rear roof, out of
+        public view. If signal reception mandates that the satellite dish be placed in public
+        view, the dish should be placed at the closest point to the home (where an adequate
+        signal can be received). This dish should be hidden as much as possible by flowering
+        plants or foliage
+  - statement: 'The Declaration and current Rules contain different size limits for satellite
+      dishes: the Declaration limits dishes larger than 30 inches to building interiors only,
+      while the current Rules permit dishes up to 39 inches.'
+    kind: conflict
+    citations:
+    - chunk_id: declaration-5.3
+      quote: satellite dishes larger than thirty (30) inches in diameter
+    - chunk_id: rules-2023-2.1
+      quote: not to exceed 39" (thirty-nine inches) in diameter
+- id: quiet-hours
+  question: What are the quiet hours in the neighborhood?
+  claims:
+  - statement: The current Rules say loud noises from television, stereo equipment, musical
+      instruments, pets and other disturbances should be avoided at all times.
+    citations:
+    - chunk_id: rules-2023-2.2
+      quote: Loud noises from television, stereo equipment, musical instruments, annoying
+        pets and other disturbances should be avoided at all times
+  - statement: The Rules single out the hours from 10 p.m. on weekdays, or 11 p.m. on weekends,
+      until 8 a.m.
+    citations:
+    - chunk_id: rules-2023-2.2
+      quote: especially between the hours of 10 p.m. on weekdays and 1 1p.m on weekends and
+        8 a.m.
+  - statement: A homeowner disturbed by a loud noise should first try to notify the person
+      causing it, or contact local law enforcement if speaking to them seems likely to lead
+      to an altercation.
+    citations:
+    - chunk_id: rules-2023-2.2
+      quote: s/he should first attempt to notify the disturbing party
+- id: arch-approval-fence-shed
+  question: How do I get approval to put up a fence or a shed?
+  claims:
+  - statement: To modify the exterior of a home, including installing a fence or shed, plans
+      must be submitted to the Architectural Review Committee for approval prior to the modification
+      being made.
+    citations:
+    - chunk_id: rules-2023-2.11
+      quote: 'Plans for any modification to the exterior of any home must be submitted to
+        the Architectural Review Committee for approval prior to the modification being made.
+        For the purpose of this article "modifications" shall include: 1) additions; 2) changes
+        to the facade of the home, including color changes; 3) fencing and/or garden walls'
+  - statement: For a shed, an Architectural Modification request with a drawing must be submitted
+      to the Review Committee for approval before installation.
+    citations:
+    - chunk_id: rules-2023-2.20
+      quote: One (1) shed per unit, no larger than 8x12x10, (96 sq. ft), no higher than 10',
+        No Metal Sheds are permitted. Must submit Architectural Modification request with
+        drawing required to RC for approval before installation.
+  - statement: If the Review Committee fails to approve or disapprove plans or request additional
+      information within 45 days after submission, the plans shall be deemed approved.
+    citations:
+    - chunk_id: declaration-4.2
+      quote: In the event that the RC fails to apptove or to disapprove such plans or to request
+        additional information reasonably required within forty-five (45) days after submission,
+        the plans shall be deemed approved.
+  - statement: The Declaration states that storage buildings and sheds of all kinds shall
+      not be installed on the Property.
+    kind: conflict
+    citations:
+    - chunk_id: declaration-5.11
+      quote: Storage buildings and sheds of all kinds shall not be installed on the Property.
+  - statement: Sheds must comply with village placement ordinance and not be on an easement,
+      and wood sheds require a village permit.
+    citations:
+    - chunk_id: rules-2023-2.20
+      quote: Must comply with village placement ordinance and not on an easement. Resin type
+        must be anchored to a wooden or paver stone base. Wood Custom built to match existing
+        home siding, roof shingles and constructed on a concrete base, village permit required.
+- id: arch-unapproved-work
+  question: What happens if I change my home's exterior without architectural approval?
+  claims:
+  - statement: Plans for modifications to the exterior of any home must be submitted to the
+      Architectural Review Committee for approval prior to the modification being made.
+    citations:
+    - chunk_id: rules-2023-2.11
+      quote: Plans for any modification to the exterior of any home must be submitted to the
+        Architectural Review Committee for approval prior to the modification being made.
+  - statement: Failure to submit plans required or to obtain written approval of the ARC prior
+      to commencing work may result in a fine of $250.00 charged to the Owner's assessment
+      account.
+    citations:
+    - chunk_id: rules-2023-2.11
+      quote: Failure to submit plans required by this Section or to obtain written approval
+        of the ARC prior to commencing work may result in a fine in the amount of $250.00
+        being charged to the Owner's assessment account.
+  - statement: Legal expenses and costs incurred by the Association or actual damages incurred
+      at the Association's expense may be charged back to the Owner.
+    citations:
+    - chunk_id: rules-2023-3.D
+      quote: In addition, any legal expenses and costs incurred by the Association or any
+        actual damages incurred at the Association's expense may be charged back to the Owner.
+  - statement: Any Owner assessed a violation charge shall pay any charges imposed within
+      thirty (30) days of notification that such charges are due.
+    citations:
+    - chunk_id: rules-2023-3.D
+      quote: Any Owner assessed hereunder shall pay any charges imposed within thirty (30)
+        days of notification that such charges are due.
+  - statement: Failure to make payment on time subjects the Owner to all legal or equitable
+      remedies necessary for collection.
+    citations:
+    - chunk_id: rules-2023-3.D
+      quote: Failure to make the payment on time shall subject the Owner to all of the legal
+        or equitable remedies necessary for the collection thereof.
+  - statement: Failure to rectify a violation can result in legal action and/or Board action
+      to correct the violation, with all expenses including attorneys' fees and court costs
+      charged to the responsible Owner's account.
+    citations:
+    - chunk_id: rules-2023-3.D
+      quote: Failure to rectify a violation can result in legal action and/or action by the
+        Board to correct the violation, and all expenses incurred by the Association, including
+        but not limited to attorneys' fees and court costs, in connection with any violations
+        of the Declaration, By-laws, or these Rules and Regulations and/or the enforcement
+        thereof shall be charged to the responsible Owner's account.
+- id: clubhouse-deposit
+  question: How much is the security deposit to rent the clubhouse?
+  claims:
+  - statement: The security deposit to rent the clubhouse is $300.
+    citations:
+    - chunk_id: clubhouse-intro
+      quote: a security deposit of Three Hundred Dollars ($300) ("Deposit") are required to
+        confirm Clubhouse reservations
+- id: tennis-courts
+  question: Are the tennis courts being torn down?
+  claims:
+  - statement: At the December 6, 2022 meeting, the Board stated that the tennis courts are
+      in disrepair with very little use, no resident responses were received for future use,
+      and the HOA will be going out for bids on demolition.
+    citations:
+    - chunk_id: minutes-2022-12-06-meeting
+      quote: Jim addressed the tennis courts are in disrepair, had very little use to justify
+        rebuilding courts again. No resident responses were received for future use so the
+        HOA will be going out for bids on demolition.
+  - statement: The same minutes note a possible grill and picnic area to be added for residents
+      to use, to be determined.
+    citations:
+    - chunk_id: minutes-2022-12-06-meeting
+      quote: Possible grill and picnic area to be added for residents to use, to be determined.
+- id: membership-loss-vote
+  question: Did the HOA vote to take away membership rights for unpaid assessments?
+  claims:
+  - statement: The Bylaws authorize the Board of Directors to suspend membership rights during
+      periods when capital contributions or assessments remain unpaid.
+    citations:
+    - chunk_id: bylaws-3.4
+      quote: The membership rights of any petson whosc interest in the Development is subject
+        to the making of capital contributions and the payment of g/ 2y/ Zuey L)y BULYEY LAKEWOUL
+        UREEY A assessments under Section 3.3 hereof, whether or not he be personally obligated
+        to pay such capital contributions and assessments, may be suspended by action of the
+        Board of Directors dwing the petiod when a capital contribution ox assessment o1 installment
+        of either temains uapaid
+  - statement: The October 12, 2023 meeting minutes record a vote on membership loss due to
+      past due assessments, but do not record an outcome or decision.
+    citations:
+    - chunk_id: minutes-2023-10-12-meeting
+      quote: A. Vote on Membership loss due to past due assessments.
+- id: governance-board
+  question: Who runs the HOA and makes decisions for it?
+  claims:
+  - statement: The Lakewood Creek Homeowners Association is governed by a Board of Directors.
+    citations:
+    - chunk_id: about-1
+      quote: The operations of the Lakewood Creek Homeowners Association is governed by a
+        Board of Directors
+  - statement: The Board of Directors is responsible for overseeing daily functions and financial
+      responsibilities of the Association.
+    citations:
+    - chunk_id: about-1
+      quote: The Board is responsible for overseeing the daily functions and financial responsibilities
+        of the Association
+  - statement: The Board of Directors is responsible for maintaining homeowners' compliance
+      with established rules, regulations and guidelines.
+    citations:
+    - chunk_id: about-1
+      quote: for maintaining homeowners' compliance with the established rules, regulations
+        and guidelines
+  - statement: The Board may promulgate rules and regulations to aid in carrying out maintenance
+      and management duties and for operation and use of the Common Areas and Common Facilities.
+    citations:
+    - chunk_id: declaration-7.7.6
+      quote: the Board may also promulgate rules and regulations to aid in carrying out of
+        said maintenance and management duties and for operation and use of the Common Areas
+        and Common Facilities
+  - statement: The Board of Directors shall consist of not less than three nor more than seven
+      directors, as provided in the By-Laws.
+    citations:
+    - chunk_id: articles-article-8
+      quote: consisting of not less than three nor more than seven directors, as provided
+        in the By-Laws
+  - statement: The Board may delegate its operating authority to such corporations, individuals,
+      and committees as it, in its discretion, may determine.
+    citations:
+    - chunk_id: articles-article-8
+      quote: The Board may delegare its operaring awthoriry to such corporations, individuals,
+        and commitiees as i, in its discretion, may determine
+- id: records-inspection
+  question: Can I inspect the Association's financial records?
+  claims:
+  - statement: The Declaration requires the Association to maintain its books, records, and
+      financial statements and make them available for examination and copying at convenient
+      hours of weekdays by any Owners or their mortgagees and their duly authorized agents
+      and attorneys.
+    citations:
+    - chunk_id: declaration-10.1
+      quote: 'The Association shall maintain the following records and make them available
+        for examination and copying at convenient hours of weekdays by any Owners or their
+        mortgagees and their duly authorized agents and attorneys:'
+    - chunk_id: declaration-10.1.1
+      quote: the Association's books, records, and financial statements;
+  - statement: 765 ILCS 160/1-30 states that the board shall maintain detailed and accurate
+      records in chronological order of the receipts and expenditures affecting the common
+      areas, and make them available for examination and copying at convenient hours of weekdays
+      by any member or unit owner, their mortgagees, and their duly authorized agents or attorneys.
+    citations:
+    - chunk_id: cicaa-1-30-c
+      quote: Detailed and accurate records in chronological order of the receipts and expenditures
+        affecting the common areas, specifying and itemizing the maintenance and repair expenses
+        of the common areas and any other expenses incurred, and copies of all contracts,
+        leases, or other agreements entered into by the board shall be maintained.
+    - chunk_id: cicaa-1-30-c
+      quote: 'make them available for examination and copying at convenient hours of weekdays
+        by any member or unit owner in a common interest community subject to the authority
+        of the board, their mortgagees, and their duly authorized agents or attorneys:'
+  - statement: Under the Declaration, where a request for records is made in writing to the
+      Association or its agent, failure to provide the requested record or to respond within
+      thirty (30) days is deemed a denial.
+    citations:
+    - chunk_id: declaration-10.1.5
+      quote: Where a request for records under this Section is made in wiiting to the Association
+        or its agent, failure to provide the requested record or to respond within thirty
+        (30) days shall be deemed a denial by the Association.
+  - statement: The Declaration allows the Association to charge a reasonable fee for the cost
+      of copying records.
+    citations:
+    - chunk_id: declaration-10.1.5
+      quote: A reasonable fee may be charged by the Association for the cost of copying records.
+- id: cicaa-applies
+  question: Does the Common Interest Community Association Act apply to Lakewood Creek?
+  claims:
+  - statement: 765 ILCS 160/1-10 states that the provisions of the Common Interest Community
+      Association Act are applicable to all common interest community associations in the
+      State of Illinois unless expressly provided otherwise.
+    citations:
+    - chunk_id: cicaa-1-10
+      quote: Unless expressly provided otherwise herein, the provisions of this Act are applicable
+        to all common interest community associations in this State.
+  - statement: 765 ILCS 160/1-75 states that a common interest community association organized
+      under the General Not for Profit Corporation Act of 1986 with either 10 units or less
+      or annual budgeted assessments of $100,000 or less is exempt from the Act unless it
+      affirmatively elects to be covered.
+    citations:
+    - chunk_id: cicaa-1-75
+      quote: A common interest community association organized under the General Not for Profit
+        Corporation Act of 1986 and having either (i) 10 units or less or (ii) annual budgeted
+        assessments of $100,000 or less shall be exempt from this Act unless the association
+        affirmatively elects to be covered by this Act by a majority of its directors or members.
+  - statement: Lakewood Creek Homeowners Association is organized as an Illinois not-for-profit
+      corporation.
+    citations:
+    - chunk_id: declaration-7.1
+      quote: Developer shall form an Illinois not-for-profit corporation to be known as the
+        " Lakewood Creek Homeowners Association"
+- id: director-removal
+  question: How can a director be removed from the Board?
+  claims:
+  - statement: The Bylaws state that any director may be removed from the Board, with or without
+      cause, by a majority vote of the Members of the Association.
+    citations:
+    - chunk_id: bylaws-5.3
+      quote: Any director may be temoved from the Board, with or without cause, by a majotity
+        vote of the Members of the Association.
+  - statement: Illinois statute 805 ILCS 105/108.35(c)(1) states that in a corporation with
+      members entitled to vote for directors, a director may be removed by the affirmative
+      vote of two-thirds of the votes present and voted, either in person or by proxy.
+    citations:
+    - chunk_id: nfp-act-108.35-a
+      quote: A director may be removed by the affirmative vote of two-thirds of the votes
+        present and voted, either in person or by proxy.
+  - statement: Illinois statute 765 ILCS 160/1-35(c) states that two-thirds of the membership
+      may remove a board member as a director at a duly called special meeting.
+    citations:
+    - chunk_id: cicaa-1-35-a
+      quote: Two-thirds of the membership may remove a board member as a director at a duly
+        called special meeting.
+  - statement: When a director is removed, their successor is selected by the remaining Members
+      of the Board and serves for the unexpired term of the predecessor.
+    citations:
+    - chunk_id: bylaws-5.3
+      quote: In the event of death, resignation, or removal of a director, his successor shall
+        be sclected by the remaining Members of the Board and shall serve for the unexpired
+        term of his predecessor
+  - statement: Illinois statute 805 ILCS 105/108.35(c)(2) requires that written notice of
+      a member meeting to remove a director must be delivered to all members entitled to vote,
+      and must state that a purpose of the meeting is to vote upon the removal of one or more
+      named directors.
+    citations:
+    - chunk_id: nfp-act-108.35-a
+      quote: No director shall be removed at a meeting of members entitled to vote unless
+        the written notice of such meeting is delivered to all members entitled to vote on
+        removal of directors. Such notice shall state that a purpose of the meeting is to
+        vote upon the removal of one or more directors named in the notice.
+  - statement: 'The Bylaws and Illinois statute 765 ILCS 160/1-35(c) differ on the voting
+      threshold: the Bylaws require a majority vote of Members, while the statute requires
+      two-thirds of the membership.'
+    kind: conflict
+    citations:
+    - chunk_id: bylaws-5.3
+      quote: by a majotity vote of the Members of the Association
+    - chunk_id: cicaa-1-35-a
+      quote: Two-thirds of the membership may remove a board member
+- id: board-meeting-frequency
+  question: How often must the Board of Directors meet?
+  claims:
+  - statement: 765 ILCS 160/1-30 states that the board shall meet at least 4 times annually.
+    citations:
+    - &id002
+      chunk_id: cicaa-1-30-a
+      quote: The board shall meet at least 4 times annually.
+  - statement: The Bylaws state that regular meetings of the Board of Directors shall be held
+      at least semi-annually.
+    citations:
+    - &id001
+      chunk_id: bylaws-7.1
+      quote: Regular meetings of the Board of Directors shall be held at least serni-anmually
+        witbout notice
+  - statement: The Bylaws and 765 ILCS 160/1-30 differ on how often the Board must meet.
+    kind: conflict
+    citations:
+    - *id001
+    - *id002
