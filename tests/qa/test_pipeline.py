@@ -338,6 +338,7 @@ def test_settings_from_env() -> None:
 
 
 def test_jev_concurrency_env_with_legacy_fallback() -> None:
+    assert QASettings.from_env({}).jev_concurrency == 16
     assert QASettings.from_env({"JEV_CONCURRENCY": "3"}).jev_concurrency == 3
     assert QASettings.from_env({"SWEEP_CONCURRENCY": "2"}).jev_concurrency == 2
     both = {"JEV_CONCURRENCY": "5", "SWEEP_CONCURRENCY": "2"}

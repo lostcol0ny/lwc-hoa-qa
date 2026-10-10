@@ -236,6 +236,7 @@ class CaseResult(BaseModel):
     cited: list[str]
     cost_usd: float
     latency_ms: float
+    stage_ms: dict[str, float] = Field(default_factory=dict)
     answer_text: str
     conflicts_noted: list[str]
     diagnostics: CaseDiagnostics | None = None
@@ -250,6 +251,8 @@ class EvalReport(BaseModel):
     max_cost_usd: float | None
     latency_p50_ms: float
     latency_p95_ms: float
+    # Median per pipeline stage, over the cases where that stage ran.
+    stage_p50_ms: dict[str, float] = Field(default_factory=dict)
 
 
 def percentile(values: Sequence[float], fraction: float) -> float:
@@ -344,6 +347,7 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
                 cited=[citation.chunk_id for citation in answer.citations],
                 cost_usd=result.estimated_cost_usd,
                 latency_ms=round(result.latency_ms, 1),
+                stage_ms={k: round(v, 1) for k, v in result.stage_ms.items()},
                 answer_text=answer.answer_text,
                 conflicts_noted=list(answer.conflicts_noted),
                 diagnostics=recorder.data if recorder else None,
@@ -361,7 +365,19 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
         max_cost_usd=float(declared) if isinstance(declared, int | float) else None,
         latency_p50_ms=percentile(latencies, 0.50),
         latency_p95_ms=percentile(latencies, 0.95),
+        stage_p50_ms=_stage_medians(results),
     )
+
+
+def _stage_medians(results: Sequence[CaseResult]) -> dict[str, float]:
+    """Median time per stage; a refused or invalid case never reaches the later
+    stages, so zeros are left out rather than dragging the median down."""
+    by_stage: dict[str, list[float]] = {}
+    for result in results:
+        for stage, ms in result.stage_ms.items():
+            if ms > 0:
+                by_stage.setdefault(stage, []).append(ms)
+    return {stage: percentile(times, 0.50) for stage, times in by_stage.items()}
 
 
 def render_table(report: EvalReport) -> str:
@@ -385,6 +401,13 @@ def render_table(report: EvalReport) -> str:
             else ""
         )
     )
+    if report.stage_p50_ms:
+        lines.append(
+            "stage p50: "
+            + ", ".join(
+                f"{stage} {ms / 1000:.1f}s" for stage, ms in report.stage_p50_ms.items()
+            )
+        )
     return "\n".join(lines)
 
 

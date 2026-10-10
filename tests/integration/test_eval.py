@@ -392,6 +392,8 @@ def test_runner_scores_prints_and_reports_cost(
     assert report["cases"][0]["latency_ms"] == 1.0
     assert (report["latency_p50_ms"], report["latency_p95_ms"]) == (1.0, 1.0)
     assert "latency p50 0.0s, p95 0.0s" in table
+    # An asker that reports no stage times adds no stage line.
+    assert report["stage_p50_ms"] == {} and "stage p50" not in table
     # The table never prints questions or answers.
     assert FINE_CASE["question"] not in table and "third fine" not in table
 
@@ -463,6 +465,9 @@ def test_runner_with_the_real_asker_and_fake_providers(tmp_path: Path) -> None:
     assert code == 0, report
     assert report["cases"][0]["cited"] == ["rules-2023-fines"]
     assert 0 < report["total_cost_usd"] <= report["max_cost_usd"]
+    stages = ["gate", "sweep", "answer", "verify"]
+    assert list(report["cases"][0]["stage_ms"]) == stages
+    assert list(report["stage_p50_ms"]) == stages
 
 
 def test_runner_records_diagnostics_for_traceable_askers(tmp_path: Path) -> None:

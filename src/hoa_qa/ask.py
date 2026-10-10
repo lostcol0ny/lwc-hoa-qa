@@ -13,7 +13,8 @@ import re
 import time
 import unicodedata
 import uuid
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Protocol, Self
 
@@ -89,6 +90,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DOCUMENTS_URL = "https://lakewoodcreekhoa.com/"
 DEFAULT_JEV_MODEL = "jev-1.13.0"
+# Concurrent Jev requests per question. The sweep is ~100 requests and ~190K
+# tokens on the real corpus, and Jev 1.13 allows 80 requests and 100K tokens
+# per second per account (docs.typesafe.ai/models, read 2026-10-09), so the
+# token rate, not this number, is the floor once it is high enough. Over the
+# limit the SDK backs off and retries, which is slower, not an error.
+DEFAULT_JEV_CONCURRENCY = 16
+# Pipeline stages timed per request (AskResult.stage_ms and the request log).
+# "answer" and "verify" add up both attempts when the answer is regenerated.
+STAGES = ("gate", "sweep", "answer", "verify")
 
 DISCLAIMER = (
     "Unofficial tool, not legal advice; the governing documents and the Board "
@@ -178,7 +188,7 @@ class QASettings(BaseModel):
     gate_threshold: float = Field(default=0.5, ge=0, le=1)
     sweep_threshold: float = Field(default=0.3, ge=0, le=1)
     sweep_top_k: int = Field(default=8, ge=1)
-    jev_concurrency: int = Field(default=4, ge=1)
+    jev_concurrency: int = Field(default=DEFAULT_JEV_CONCURRENCY, ge=1)
     answer_max_tokens: int = Field(default=DEFAULT_MAX_OUTPUT_TOKENS, ge=256, le=16_000)
     support_threshold: float = Field(default=0.5, ge=0, le=1)
     documents_url: str = DEFAULT_DOCUMENTS_URL
@@ -221,6 +231,8 @@ class AskResult(BaseModel):
     answer_input_tokens: int
     answer_output_tokens: int
     latency_ms: float
+    # Wall-clock milliseconds per stage in STAGES; a stage that never ran is 0.
+    stage_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class Asker(Protocol):
@@ -252,11 +264,28 @@ class _Usage:
     answer_calls: int = 0
     model: str = ""
     notes: list[str] = field(default_factory=list)
+    stage_ms: dict[str, float] = field(
+        default_factory=lambda: dict.fromkeys(STAGES, 0.0)
+    )
 
     def cost(self) -> float:
         return jev_cost_usd(self.jev_input_tokens) + answer_cost_usd(
             self.model, self.answer_input_tokens, self.answer_output_tokens
         )
+
+
+@contextmanager
+def _timed(usage: _Usage, stage: str) -> Iterator[None]:
+    """Add the block's wall-clock time to ``usage.stage_ms[stage]``.
+
+    Recorded even when the block raises, so an error outcome still shows
+    where the time went.
+    """
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        usage.stage_ms[stage] += (time.perf_counter() - started) * 1000
 
 
 @dataclass(frozen=True)
@@ -464,6 +493,7 @@ class QAAsker:
             answer_input_tokens=usage.answer_input_tokens,
             answer_output_tokens=usage.answer_output_tokens,
             latency_ms=latency_ms,
+            stage_ms=dict(usage.stage_ms),
         )
         _log_result(asked, usage)
         return asked
@@ -482,7 +512,8 @@ class QAAsker:
 
         # One bound for every Jev request this call makes (sweep and support).
         limit = asyncio.Semaphore(s.jev_concurrency)
-        gate = await run_gate(self._jev, cleaned, s.gate_threshold)
+        with _timed(usage, "gate"):
+            gate = await run_gate(self._jev, cleaned, s.gate_threshold)
         usage.jev_input_tokens += gate.input_tokens
         trace.gate(gate.probability, gate.passed)
         if not gate.passed:
@@ -493,16 +524,17 @@ class QAAsker:
                 f"read the HOA documents at {s.documents_url}",
             )
 
-        swept = await sweep(
-            self._jev,
-            cleaned,
-            self._plan.passages,
-            top_k=s.sweep_top_k,
-            threshold=s.sweep_threshold,
-            limit=limit,
-            count_tokens=self._count_tokens,
-            limits=self._limits,
-        )
+        with _timed(usage, "sweep"):
+            swept = await sweep(
+                self._jev,
+                cleaned,
+                self._plan.passages,
+                top_k=s.sweep_top_k,
+                threshold=s.sweep_threshold,
+                limit=limit,
+                count_tokens=self._count_tokens,
+                limits=self._limits,
+            )
         usage.jev_input_tokens += swept.input_tokens
         trace.sweep(swept.scores, swept.selected)
         _log_sweep(request_id, swept.selected)
@@ -522,15 +554,15 @@ class QAAsker:
         # retry that turns out worse falls back to it.
         fallback: tuple[AnswerDraft, list[_Verified]] | None = None
         for attempt in range(1, 3):
-            generated = await self._provider.generate(
-                build_prompt(
-                    cleaned,
-                    passages,
-                    failed_claims=failed,
-                    authority_note=authority_failed,
-                    invalid_output=invalid_output,
-                )
+            prompt = build_prompt(
+                cleaned,
+                passages,
+                failed_claims=failed,
+                authority_note=authority_failed,
+                invalid_output=invalid_output,
             )
+            with _timed(usage, "answer"):
+                generated = await self._provider.generate(prompt)
             usage.answer_calls += 1
             usage.answer_input_tokens += generated.input_tokens
             usage.answer_output_tokens += generated.output_tokens
@@ -562,7 +594,8 @@ class QAAsker:
             for c in (c for claim in draft.claims for c in claim.citations):
                 if c.chunk_id in passage_ids and c.chunk_id not in cited_ids:
                     cited_ids.append(c.chunk_id)
-            verified = await self._verify(draft, passages, limit, usage)
+            with _timed(usage, "verify"):
+                verified = await self._verify(draft, passages, limit, usage)
             trace.attempt(attempt, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
             can_drop = _can_drop(verified)
@@ -864,6 +897,9 @@ def _log_result(result: AskResult, usage: _Usage) -> None:
         "request_id": result.answer.request_id,
         "outcome": result.answer.outcome.value,
         "latency_ms": round(result.latency_ms, 1),
+        **{
+            f"{stage}_ms": round(result.stage_ms.get(stage, 0.0), 1) for stage in STAGES
+        },
         "jev_input_tokens": result.jev_input_tokens,
         "answer_model": usage.model,
         "answer_calls": usage.answer_calls,

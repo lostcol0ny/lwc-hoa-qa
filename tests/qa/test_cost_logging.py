@@ -21,7 +21,7 @@ from hoa_qa.answer.pricing import (
     JEV_INPUT_USD_PER_MTOK,
     answer_price,
 )
-from hoa_qa.ask import QASettings, max_cost_usd
+from hoa_qa.ask import STAGES, QASettings, max_cost_usd
 from hoa_qa.models import Corpus, Outcome
 from hoa_qa.retrieval.sweep import plan_passages
 
@@ -212,6 +212,54 @@ def test_max_cost_value_for_mini_corpus(corpus: Corpus, settings: QASettings) ->
 SECRET_QUESTION = "My neighbor Zebulon at 12 Quail Run keeps parking a boat, fine?"
 
 
+def test_stage_timing_covers_every_stage_that_ran(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    result = run(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    assert result.answer.outcome is Outcome.answered
+    assert tuple(result.stage_ms) == STAGES
+    assert all(ms > 0 for ms in result.stage_ms.values())
+    # Stages run one after another, so they cannot add up to more than the total.
+    assert sum(result.stage_ms.values()) <= result.latency_ms
+
+
+def test_stage_timing_is_zero_for_stages_a_refusal_never_reaches(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    jev.gate = 0.0
+    result = run(corpus, settings, jev, FakeProvider([FINES_DRAFT]), "poem")
+    assert result.stage_ms["gate"] > 0
+    assert result.stage_ms["sweep"] == result.stage_ms["answer"] == 0
+    assert result.stage_ms["verify"] == 0
+
+
+def test_stage_timing_survives_a_failed_stage(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    jev.fail = lambda state: state.get("document") == "LWC Bylaws"
+    result = run(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    assert result.answer.outcome is Outcome.error
+    assert result.stage_ms["sweep"] > 0
+    assert result.stage_ms["answer"] == 0
+
+
+def test_stage_timing_adds_up_both_attempts(
+    corpus: Corpus, settings: QASettings, jev: FakeJev
+) -> None:
+    """A regenerated answer reports the answer stage as both calls together."""
+
+    class SlowProvider(FakeProvider):
+        async def generate(self, prompt):
+            await asyncio.sleep(0.02)
+            return await super().generate(prompt)
+
+    bad = draft(claim("Not in the text.", ("rules-2023-fines", "not in the text")))
+    provider = SlowProvider([bad, FINES_DRAFT])
+    result = run(corpus, settings, jev, provider)
+    assert len(provider.prompts) == 2
+    assert result.stage_ms["answer"] >= 40
+
+
 @pytest.mark.parametrize("gate", [0.95, 0.0], ids=["answered", "refused"])
 def test_logs_never_contain_question_or_answer_text(
     corpus: Corpus,
@@ -233,6 +281,7 @@ def test_logs_never_contain_question_or_answer_text(
     assert fields["request_id"] == result.answer.request_id
     assert fields["outcome"] == result.answer.outcome.value
     assert {"latency_ms", "jev_input_tokens", "estimated_cost_usd"} <= fields.keys()
+    assert {f"{stage}_ms" for stage in STAGES} <= fields.keys()
 
 
 def test_failed_claim_text_is_not_logged(
