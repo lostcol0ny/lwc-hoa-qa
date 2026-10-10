@@ -154,9 +154,22 @@ The model never decides whether these appear (`answer/statute_notes.py`):
 Optional. Without an `answer_cache.json` the pipeline is exactly as above.
 
 **What it is.** `evals/cache_questions.yaml` is a committed list of common
-questions. `hoa-qa cache build` runs each one through the full pipeline (no
-cache attached) and stores the verified answer of every one that came out
-`answered`. At request time, a question that Jev judges to be the same as a
+questions, each with the **reviewed claims** that make up its answer: one
+sentence per claim, with the passage and exact quote that back it.
+`hoa-qa cache build` does not rewrite them. For each question it runs the
+sweep, adds the cited passages, and puts every claim through the same checks
+as a claim the answer model wrote (quote found word for word, authority and
+advice rules, Jev support). The answer is stored only if **every** claim
+passes; there is no retry and nothing is dropped, so reviewed wording is never
+altered and never shown with a piece missing. If a document changes and a
+claim stops verifying, the build names the claim and its reason, exits 1, and
+that question is left out of the cache.
+
+A question with no claims is drafted by the answer model through the full
+pipeline, as a starting point: `--propose FILE` writes the list back out with
+each drafted answer's kept claims filled in, to review, edit and commit.
+Because committed claims are verified rather than regenerated, a rebuild
+produces the same text every time. At request time, a question that Jev judges to be the same as a
 stored one gets the stored answer; the sweep and the answer model are skipped.
 
 **Why curated.** Only questions from the committed list are ever stored, so
@@ -203,10 +216,15 @@ every new curated question.
 
 **Building and shipping.** The manual **Answer cache** workflow builds the
 cache against the latest corpus artifact, runs the check, and uploads
-`answer_cache.json` as an artifact. Read it before shipping: whatever the
-pipeline answered that day is what residents will see until the next build.
-Nothing deploys it yet; `vercel.json` already bundles the file if it is
-present next to `corpus.json`.
+`answer_cache.json` and `proposed_questions.yaml` as artifacts.
+The deploy workflow then picks up the cache from the latest **successful
+Answer cache run on main** (never a branch run), keeps it only if
+`hoa-qa cache verify` confirms it was built from the corpus being deployed,
+and otherwise deploys without one. A run fails, and so is never deployed, if
+a reviewed answer stops verifying or the matcher produces a false hit.
+Artifacts expire after 30 days, so re-run the workflow after each corpus
+build and at least monthly; to ship a freshly built cache without another
+commit, re-run the latest Deploy run on main.
 
 ## Eval diagnostics
 

@@ -24,13 +24,18 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
+from hoa_qa.answer.prompt import (
+    MAX_CITATIONS_PER_CLAIM,
+    MAX_CLAIMS,
+    MAX_STATEMENT_CHARS,
+)
 from hoa_qa.models import Answer, Corpus, Model, Outcome
 from hoa_qa.retrieval.jev import (
     MAX_QUESTION_CHARS,
@@ -56,9 +61,39 @@ QuestionText = Annotated[
 ]
 
 
+class ReviewedCitation(Model):
+    chunk_id: str = Field(min_length=1)
+    # Long enough to identify a passage: the answer model once cited the
+    # single character "3", which is "found" in almost any text.
+    quote: str = Field(min_length=8)
+
+
+class ReviewedClaim(Model):
+    """One sentence of a stored answer, written or approved by the operator.
+
+    The build checks it exactly like a claim the answer model wrote: the quote
+    must be in the cited passage word for word, the source must be allowed to
+    answer, and Jev must judge that the passages state all of it.
+    """
+
+    statement: str = Field(min_length=1, max_length=MAX_STATEMENT_CHARS)
+    kind: Literal["answer", "conflict"] = "answer"
+    citations: tuple[ReviewedCitation, ...] = Field(
+        min_length=1, max_length=MAX_CITATIONS_PER_CLAIM
+    )
+
+
 class CuratedQuestion(Model):
+    """``claims`` empty: the answer model drafts the answer at build time.
+
+    With ``claims``, the answer model is not used: the stored answer is these
+    claims, in this order, if every one of them passes verification.
+    """
+
     id: EntryId
     question: QuestionText
+    claims: tuple[ReviewedClaim, ...] = Field(default=(), max_length=MAX_CLAIMS)
+    refer_to_board: bool = False
 
 
 class CuratedQuestions(Model):
@@ -295,46 +330,6 @@ async def lookup(
         requests=len(batches),
         candidates=len(candidates),
     )
-
-
-class _Asked(Protocol):
-    @property
-    def answer(self) -> Answer: ...
-
-    @property
-    def estimated_cost_usd(self) -> float: ...
-
-
-@dataclass(frozen=True)
-class BuildRow:
-    id: str
-    outcome: Outcome
-    cached: bool
-    cost_usd: float
-
-
-async def build_entries(
-    questions: CuratedQuestions, ask: Callable[[str], Awaitable[_Asked]]
-) -> tuple[tuple[CacheEntry, ...], list[BuildRow]]:
-    """Run every curated question through ``ask``; keep the answered ones.
-
-    ``ask`` must be the full pipeline with no cache attached. Questions run
-    one at a time, like the eval, to keep the API rate and spend modest.
-    """
-    entries: list[CacheEntry] = []
-    rows: list[BuildRow] = []
-    for item in questions.questions:
-        result = await ask(item.question)
-        answer = result.answer
-        answered = answer.outcome is Outcome.answered
-        if answered:
-            entries.append(
-                CacheEntry(id=item.id, question=item.question, answer=answer)
-            )
-        rows.append(
-            BuildRow(item.id, answer.outcome, answered, result.estimated_cost_usd)
-        )
-    return tuple(entries), rows
 
 
 class MatchCase(Model):

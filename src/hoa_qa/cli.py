@@ -4,9 +4,12 @@
 - ``hoa-qa eval evals/golden.yaml --corpus build/corpus.json [--json out.json]``
 - ``hoa-qa eval --write-ids --corpus build/corpus.json`` (refresh the id manifest)
 - ``hoa-qa cache build evals/cache_questions.yaml --corpus build/corpus.json
-  --out build/answer_cache.json`` (answer the curated questions once)
+  --out build/answer_cache.json [--propose drafted.yaml]`` (verify the reviewed
+  answers; draft any question that has none yet)
 - ``hoa-qa cache check evals/cache_cases.yaml --cache build/answer_cache.json``
   (does the matcher hit the paraphrases and miss the near-misses?)
+- ``hoa-qa cache verify --cache answer_cache.json --corpus corpus.json`` (was
+  the cache built from this corpus? no API calls)
 """
 
 import argparse
@@ -21,15 +24,15 @@ from pathlib import Path
 from hoa_qa.ask import AskerFactory, AskResult, QASettings, build_asker
 from hoa_qa.cache import (
     AnswerCache,
-    BuildRow,
+    CuratedQuestions,
     MatchRow,
-    build_entries,
     check_matches,
     corpus_fingerprint,
     load_cache,
     load_match_cases,
     load_questions,
 )
+from hoa_qa.cache_build import BuildRow, build_entries, with_claims
 from hoa_qa.eval import (
     DEFAULT_GOLDEN_PATH,
     DEFAULT_IDS_PATH,
@@ -94,20 +97,31 @@ def _parser() -> argparse.ArgumentParser:
     )
     build.add_argument("--corpus", required=True, type=Path)
     build.add_argument("--out", required=True, type=Path)
+    build.add_argument(
+        "--propose",
+        type=Path,
+        metavar="PATH",
+        help="Also write the question list with each answer's claims filled in",
+    )
     check = actions.add_parser("check", help="Score the matcher on known pairs")
     check.add_argument("cases", nargs="?", type=Path, default=DEFAULT_MATCH_CASES_PATH)
     check.add_argument("--cache", required=True, type=Path)
+    verify = actions.add_parser(
+        "verify", help="Exit 0 if the cache was built from this corpus (no API calls)"
+    )
+    verify.add_argument("--cache", required=True, type=Path)
+    verify.add_argument("--corpus", required=True, type=Path)
     return parser
 
 
 async def _build_cache(
-    factory: AskerFactory, corpus: Corpus, questions_path: Path
+    factory: AskerFactory, corpus: Corpus, questions: CuratedQuestions
 ) -> tuple[AnswerCache, list[BuildRow]]:
     settings = QASettings.from_env()
     # No cache is attached: every stored answer comes from the full pipeline.
     asker = factory(corpus, settings)
     try:
-        entries, rows = await build_entries(load_questions(questions_path), asker)
+        entries, rows = await build_entries(questions, asker)
     finally:
         close = getattr(asker, "aclose", None)
         if close is not None:
@@ -125,17 +139,21 @@ async def _build_cache(
 def _run_cache_build(args: argparse.Namespace, factory: AskerFactory) -> int:
     try:
         corpus = load_corpus(args.corpus)
-        cache, rows = asyncio.run(_build_cache(factory, corpus, args.questions))
+        questions = load_questions(args.questions)
+        cache, rows = asyncio.run(_build_cache(factory, corpus, questions))
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"hoa-qa: {exc}", file=sys.stderr)
         return 2
     width = max(len(row.id) for row in rows)
-    print(f"{'question':<{width}}  cached  outcome            cost_usd")
+    print(f"{'question':<{width}}  cached  source     outcome            cost_usd")
     for row in rows:
         print(
             f"{row.id:<{width}}  {'yes' if row.cached else 'NO':<6}  "
-            f"{row.outcome.value:<17}  {row.cost_usd:8.5f}"
+            f"{row.source:<9}  {row.outcome.value:<17}  {row.cost_usd:8.5f}"
         )
+        # Codes and scores only, like every other log line.
+        for problem in row.problems:
+            print(f"{'':<{width}}    {problem}")
     total = sum(row.cost_usd for row in rows)
     print(f"\ncached {len(cache.entries)}/{len(rows)}; total cost ${total:.4f}")
     if not cache.entries:
@@ -145,7 +163,41 @@ def _run_cache_build(args: argparse.Namespace, factory: AskerFactory) -> int:
     temporary = args.out.with_name(args.out.name + ".tmp")
     temporary.write_text(cache.model_dump_json(indent=2) + "\n", encoding="utf-8")
     temporary.replace(args.out)
+    if args.propose is not None:
+        _write_questions(with_claims(questions, rows), args.propose)
+    rejected = [row.id for row in rows if row.source == "reviewed" and not row.cached]
+    if rejected:
+        # Reviewed wording that no longer verifies needs a person to look.
+        print(f"reviewed answers failed verification: {rejected}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _run_cache_verify(args: argparse.Namespace) -> int:
+    """Would the app use this cache with this corpus? The deploy asks this."""
+    try:
+        cache = load_cache(args.cache)
+        corpus = load_corpus(args.corpus)
+    except (OSError, ValueError) as exc:
+        # The type only: a validation message can echo file contents.
+        print(f"hoa-qa: cache unusable ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    if cache.corpus_fingerprint != corpus_fingerprint(corpus):
+        print("hoa-qa: cache was built from a different corpus", file=sys.stderr)
+        return 1
+    built = cache.built_at.date().isoformat()
+    print(f"answer cache ok: {len(cache.entries)} entries, built {built}")
+    return 0
+
+
+def _write_questions(questions: CuratedQuestions, path: Path) -> None:
+    import yaml  # load_questions has already checked that PyYAML is installed
+
+    data = questions.model_dump(mode="json", exclude_defaults=True)
+    path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=88),
+        encoding="utf-8",
+    )
 
 
 async def _check_cache(
@@ -286,6 +338,8 @@ def main(
     if args.command == "cache":
         if args.cache_command == "build":
             return _run_cache_build(args, asker_factory)
+        if args.cache_command == "verify":
+            return _run_cache_verify(args)
         return _run_cache_check(args, jev_factory)
     if args.command == "eval":
         return _run_eval_command(args, asker_factory)

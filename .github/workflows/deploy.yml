@@ -96,6 +96,36 @@ jobs:
       - name: Validate corpus
         if: steps.corpus.outputs.run_id != ''
         run: uv run --no-dev python -c "from hoa_qa.models import load_corpus; load_corpus('corpus.json')"
+      # Optional. Only a successful Answer cache run on main is used, so a
+      # branch build can never reach production, and that workflow fails on a
+      # false match or a reviewed answer that no longer verifies. Without a
+      # usable cache every question simply takes the full pipeline.
+      - name: Download answer cache
+        if: steps.corpus.outputs.run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cache_run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow answer-cache.yml \
+            --branch main --status success --limit 1 --json databaseId \
+            --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -z "$cache_run_id" ] || [ "$cache_run_id" = "null" ]; then
+            echo "No successful 'Answer cache' run on main: deploying without a cache." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! gh run download "$cache_run_id" --repo "$GITHUB_REPOSITORY" --name answer-cache --dir cache-artifact \
+            || [ ! -f cache-artifact/answer_cache.json ]; then
+            echo "::warning::Answer cache run $cache_run_id has no usable artifact (it may have expired): deploying without a cache."
+            exit 0
+          fi
+          mv cache-artifact/answer_cache.json .
+          # Built from a different corpus, or unreadable: the app would ignore
+          # it anyway, so leave it out and say so.
+          if uv run --no-dev hoa-qa cache verify --cache answer_cache.json --corpus corpus.json; then
+            echo "Using answer cache from run $cache_run_id" >> "$GITHUB_STEP_SUMMARY"
+          else
+            rm -f answer_cache.json
+            echo "::warning::The answer cache from run $cache_run_id does not match this corpus: deploying without a cache. Re-run 'Answer cache'."
+          fi
       - name: Install Vercel CLI
         if: steps.corpus.outputs.run_id != ''
         run: npm install --global "vercel@${VERCEL_CLI_VERSION}"

@@ -96,6 +96,24 @@ def test_eval_workflow_is_manual_and_skips_without_secrets() -> None:
     assert uploads and "eval-results.json" in uploads[0]["with"]["path"]
 
 
+def test_deploy_answer_cache_is_optional_and_from_main_only() -> None:
+    workflow = load_workflow("deploy.yml")
+    steps = workflow["jobs"]["deploy"]["steps"]
+    (cache,) = [s for s in steps if s.get("name") == "Download answer cache"]
+    run = cache["run"]
+    # Only a successful run on main, so a branch build can't reach production.
+    assert "--workflow answer-cache.yml" in run
+    assert "--branch main --status success" in run
+    assert "${{" not in run
+    # Every way of not having a cache ends the step successfully.
+    assert "exit 1" not in run and run.count("exit 0") == 2
+    assert "hoa-qa cache verify --cache answer_cache.json --corpus corpus.json" in run
+    assert "rm -f answer_cache.json" in run
+    names = [s.get("name") for s in steps]
+    assert names.index("Validate corpus") < names.index("Download answer cache")
+    assert names.index("Download answer cache") < names.index("Build")
+
+
 def test_answer_cache_workflow_is_manual_and_never_deploys() -> None:
     workflow = load_workflow("answer-cache.yml")
     assert set(workflow[True]) == {"workflow_dispatch"}  # never on push or PRs
@@ -150,7 +168,9 @@ def test_deploy_corpus_trigger_and_production_security() -> None:
     assert "--branch main --status success" in selection["run"]
     for step in job["steps"][selection_index + 1 :]:
         assert step["if"] == "steps.corpus.outputs.run_id != ''"
-    (download,) = [s for s in job["steps"] if "gh run download" in s.get("run", "")]
+    (download,) = [
+        s for s in job["steps"] if s.get("name") == "Download selected corpus artifact"
+    ]
     assert download["env"]["run_id"] == "${{ steps.corpus.outputs.run_id }}"
     assert 'gh run download "$run_id"' in download["run"]
 
