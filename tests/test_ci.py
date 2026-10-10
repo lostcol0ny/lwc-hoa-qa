@@ -96,6 +96,25 @@ def test_eval_workflow_is_manual_and_skips_without_secrets() -> None:
     assert uploads and "eval-results.json" in uploads[0]["with"]["path"]
 
 
+def test_answer_cache_workflow_is_manual_and_never_deploys() -> None:
+    workflow = load_workflow("answer-cache.yml")
+    assert set(workflow[True]) == {"workflow_dispatch"}  # never on push or PRs
+    job = workflow["jobs"]["cache"]
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    steps = job["steps"]
+    assert steps[0]["id"] == "secrets"
+    for step in steps[1:]:
+        assert "steps.secrets.outputs.enabled == 'true'" in step["if"]
+    (build,) = [s for s in steps if "hoa-qa cache build" in s.get("run", "")]
+    (check,) = [s for s in steps if "hoa-qa cache check" in s.get("run", "")]
+    assert steps.index(build) < steps.index(check)
+    # The matcher check needs Jev only; the answer-model key stays out of it.
+    assert set(check["env"]) == {"TYPESAFE_API_KEY"}
+    for step in (build, check):
+        assert "${{" not in step["run"]
+    assert "vercel" not in str(workflow).lower()
+
+
 def test_deploy_corpus_trigger_and_production_security() -> None:
     workflow = load_workflow("deploy.yml")
     assert workflow[True]["workflow_run"] == {

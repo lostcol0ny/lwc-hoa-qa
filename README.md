@@ -121,6 +121,7 @@ default".
 | `SWEEP_THRESHOLD` | `0.3` | QA core | Minimum chunk relevance |
 | `SWEEP_TOP_K` | `8` | QA core | Maximum passages sent to the answer model |
 | `SUPPORT_THRESHOLD` | `0.5` | QA core | Minimum claim-support probability |
+| `CACHE_THRESHOLD` | `0.9` | QA core | Minimum match probability to serve a stored answer from the curated cache |
 | `JEV_CONCURRENCY` | `16` | QA core | Concurrent Jev requests per question (`SWEEP_CONCURRENCY` is a fallback name). Raised from 4 on 2026-10-09; the latency figures below were measured at 4 |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | QA core, web | Link in refusals, not-found and budget pages; must be `https://` |
 | `MONTHLY_BUDGET_USD` | `5.0` in dev; **`0` in production if missing or invalid** | web | Hard monthly spend cap (UTC calendar month) |
@@ -130,6 +131,7 @@ default".
 | `RATE_LIMIT_PER_HOUR` | `10` | web | Per-IP questions per hour |
 | `RATE_LIMIT_PER_DAY` | `50` | web | Per-IP questions per day |
 | `CORPUS_PATH` | `corpus.json` | web | Corpus file, relative to the working directory |
+| `ANSWER_CACHE_PATH` | `answer_cache.json` | web | Optional curated answer cache (`hoa-qa cache build`). Missing, unreadable, or built from another corpus means no cache |
 | `HOA_QA_FAKE_ASKER` | unset | web | `1` = canned dev answers; ignored in production |
 | `TYPESAFE_LOG_LEVEL`, `ANTHROPIC_LOG` | unset | web | Never `debug` in production (the SDKs would log questions); the app refuses to start |
 | `VERCEL`, `VERCEL_ENV` | set by Vercel | web | `VERCEL=1` trusts `x-forwarded-for`; `VERCEL_ENV=production` enables the fail-closed rules |
@@ -319,6 +321,7 @@ src/hoa_qa/
   answer/      prompt, provider, pricing
   verify/      quote check + Jev support check
   ask.py       QAAsker / build_asker (the pipeline)
+  cache.py     curated answer cache: stored answers + Jev match
   eval.py      golden-set scoring
   budget.py    monthly budget + counter stores
   web/         FastAPI app, security, rate limiting

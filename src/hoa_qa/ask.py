@@ -46,6 +46,17 @@ from hoa_qa.answer.statute_notes import (
     cites_cicaa,
     statute_disclaimer,
 )
+from hoa_qa.cache import (
+    DEFAULT_CACHE_THRESHOLD,
+    MISS,
+    AnswerCache,
+    CacheEntry,
+    CacheLookup,
+    corpus_fingerprint,
+    lookup,
+    match_request,
+    normalize_question,
+)
 from hoa_qa.models import (
     Answer,
     Authority,
@@ -98,7 +109,9 @@ DEFAULT_JEV_MODEL = "jev-1.13.0"
 DEFAULT_JEV_CONCURRENCY = 16
 # Pipeline stages timed per request (AskResult.stage_ms and the request log).
 # "answer" and "verify" add up both attempts when the answer is regenerated.
-STAGES = ("gate", "sweep", "answer", "verify")
+# "cache" (the curated-answer lookup) runs alongside "gate", so those two
+# overlap; the rest run one after another.
+STAGES = ("gate", "cache", "sweep", "answer", "verify")
 
 DISCLAIMER = (
     "Unofficial tool, not legal advice; the governing documents and the Board "
@@ -191,6 +204,10 @@ class QASettings(BaseModel):
     jev_concurrency: int = Field(default=DEFAULT_JEV_CONCURRENCY, ge=1)
     answer_max_tokens: int = Field(default=DEFAULT_MAX_OUTPUT_TOKENS, ge=256, le=16_000)
     support_threshold: float = Field(default=0.5, ge=0, le=1)
+    # A stored answer is served only at or above this match score. High on
+    # purpose: a miss costs one normal answer, a false hit answers the wrong
+    # question.
+    cache_threshold: float = Field(default=DEFAULT_CACHE_THRESHOLD, ge=0, le=1)
     documents_url: str = DEFAULT_DOCUMENTS_URL
 
     @classmethod
@@ -207,6 +224,7 @@ class QASettings(BaseModel):
             # SWEEP_CONCURRENCY is the original name, kept as a fallback.
             "jev_concurrency": ("JEV_CONCURRENCY", "SWEEP_CONCURRENCY"),
             "support_threshold": ("SUPPORT_THRESHOLD",),
+            "cache_threshold": ("CACHE_THRESHOLD",),
             "answer_max_tokens": ("ANSWER_MAX_TOKENS",),
             "documents_url": ("HOA_DOCUMENTS_URL",),
         }
@@ -233,6 +251,8 @@ class AskResult(BaseModel):
     latency_ms: float
     # Wall-clock milliseconds per stage in STAGES; a stage that never ran is 0.
     stage_ms: dict[str, float] = Field(default_factory=dict)
+    # The curated cache entry whose stored answer was served, if any.
+    cache_entry: str | None = None
 
 
 class Asker(Protocol):
@@ -264,6 +284,7 @@ class _Usage:
     answer_calls: int = 0
     model: str = ""
     notes: list[str] = field(default_factory=list)
+    cache_entry: str | None = None
     stage_ms: dict[str, float] = field(
         default_factory=lambda: dict.fromkeys(STAGES, 0.0)
     )
@@ -419,6 +440,7 @@ class QAAsker:
         provider: AnswerProvider,
         count_tokens: TokenCounter = conservative_tokens,
         limits: JevLimits = DEFAULT_LIMITS,
+        cache: AnswerCache | None = None,
     ) -> None:
         self._corpus = corpus
         self._settings = settings
@@ -429,8 +451,21 @@ class QAAsker:
         # How each chunk is sent is fixed per corpus (sized for the longest
         # question), so the sweep's work, and its cost bound, are too.
         self._plan = plan_passages(corpus.chunks, count_tokens, limits)
+        # A cache built from another corpus could cite passages that changed
+        # or no longer exist, so it is ignored rather than trusted.
+        self._cache_entries: tuple[CacheEntry, ...] = ()
+        if cache is not None:
+            if cache.corpus_fingerprint == corpus_fingerprint(corpus):
+                self._cache_entries = cache.entries
+            else:
+                logger.warning("answer cache ignored: built from a different corpus")
+        self._exact = {normalize_question(e.question): e for e in self._cache_entries}
         self._max_cost_usd = max_cost_usd(
-            self._plan.passages, settings, provider.model, provider.max_tokens
+            self._plan.passages,
+            settings,
+            provider.model,
+            provider.max_tokens,
+            self._cache_entries,
         )
         # Checked up front: a corpus with CICAA but stale evidence fails here.
         self._applicability: ApplicabilityNote | None = (
@@ -494,6 +529,7 @@ class QAAsker:
             answer_output_tokens=usage.answer_output_tokens,
             latency_ms=latency_ms,
             stage_ms=dict(usage.stage_ms),
+            cache_entry=usage.cache_entry,
         )
         _log_result(asked, usage)
         return asked
@@ -512,8 +548,20 @@ class QAAsker:
 
         # One bound for every Jev request this call makes (sweep and support).
         limit = asyncio.Semaphore(s.jev_concurrency)
-        with _timed(usage, "gate"):
-            gate = await run_gate(self._jev, cleaned, s.gate_threshold)
+        exact = self._exact.get(normalize_question(cleaned))
+        if exact is not None:
+            # A curated question, word for word: there is nothing to judge.
+            usage.cache_entry = exact.id
+            usage.notes.append("cache_exact")
+            return _cached(exact)
+        # The lookup runs alongside the gate, so a miss adds no latency.
+        looking = asyncio.ensure_future(self._lookup(cleaned, usage, limit, request_id))
+        try:
+            with _timed(usage, "gate"):
+                gate = await run_gate(self._jev, cleaned, s.gate_threshold)
+        finally:
+            # Let the lookup finish either way, so its tokens are counted.
+            found = await looking
         usage.jev_input_tokens += gate.input_tokens
         trace.gate(gate.probability, gate.passed)
         if not gate.passed:
@@ -523,6 +571,10 @@ class QAAsker:
                 "rules, governance, fees, amenities, and neighborhood. You can "
                 f"read the HOA documents at {s.documents_url}",
             )
+        if found.entry is not None:
+            usage.cache_entry = found.entry.id
+            usage.notes.append("cache_hit")
+            return _cached(found.entry)
 
         with _timed(usage, "sweep"):
             swept = await sweep(
@@ -629,6 +681,35 @@ class QAAsker:
         return self._not_found(
             OutcomeReason.unverified, self._related_documents(cited_ids, passages)
         )
+
+    async def _lookup(
+        self, question: str, usage: _Usage, limit: asyncio.Semaphore, request_id: str
+    ) -> CacheLookup:
+        """Look the question up in the curated cache; a failure is a miss."""
+        if not self._cache_entries:
+            return MISS
+        try:
+            with _timed(usage, "cache"):
+                found = await lookup(
+                    self._jev,
+                    question,
+                    self._cache_entries,
+                    threshold=self._settings.cache_threshold,
+                    limit=limit,
+                )
+        except Exception as exc:
+            # lookup() already turns provider failures into a miss; this
+            # covers anything else, so the cache can never fail a request.
+            found = CacheLookup(None, None, 0, 0, 0, error_type=type(exc).__name__)
+        usage.jev_input_tokens += found.input_tokens
+        if found.error_type is not None:
+            usage.notes.append("cache_error")
+            logger.error(
+                "cache lookup failed request_id=%s error_type=%s",
+                request_id,
+                found.error_type,
+            )
+        return found
 
     async def _verify(
         self,
@@ -789,6 +870,21 @@ class QAAsker:
                 await close()
 
 
+def _cached(entry: CacheEntry) -> _Result:
+    """A stored answer, as verified when the cache was built.
+
+    The request id and disclaimer are added fresh, like any other answer.
+    """
+    answer = entry.answer
+    return _Result(
+        Outcome.answered,
+        answer.answer_text,
+        citations=answer.citations,
+        confidence=answer.confidence,
+        conflicts=answer.conflicts_noted,
+    )
+
+
 def _has_answer(verified: Sequence[_Verified]) -> bool:
     return any(v.ok and v.kind == "answer" for v in verified)
 
@@ -824,6 +920,7 @@ def max_cost_usd(
     settings: QASettings,
     answer_model: str,
     answer_max_tokens: int,
+    cache_entries: Sequence[CacheEntry] = (),
 ) -> float:
     """Provable upper bound on one ``ask`` call's spend (docs/qa-core.md).
 
@@ -833,7 +930,8 @@ def max_cost_usd(
     passage as its own request (packing only removes repeated bytes), the
     support check charges MAX_CLAIMS single-claim requests citing the
     corpus's largest serialized passages, and the answer model is charged its
-    largest possible prompt and full output on both attempts.
+    largest possible prompt and full output on both attempts. The cache
+    lookup charges every entry as its own request, like the sweep.
     """
     worst_statement = "\U0001d538" * MAX_STATEMENT_CHARS
     chunks = list({p.chunk.id: p.chunk for p in passages}.values())
@@ -857,7 +955,11 @@ def max_cost_usd(
         ),
     )
     support_tokens = MAX_CLAIMS * byte_bound_tokens(*support_request([worst_claim]))
-    jev_tokens = gate + sweep_tokens + 2 * support_tokens
+    cache_tokens = sum(
+        byte_bound_tokens(*match_request(WORST_QUESTION, [entry]))
+        for entry in cache_entries
+    )
+    jev_tokens = gate + cache_tokens + sweep_tokens + 2 * support_tokens
 
     # The retry prompt (with failed claims listed) is the larger of the two.
     biggest = sorted(
@@ -908,6 +1010,7 @@ def _log_result(result: AskResult, usage: _Usage) -> None:
         "citations": len(result.answer.citations),
         "estimated_cost_usd": round(result.estimated_cost_usd, 6),
         "notes": ",".join(usage.notes),
+        "cache": usage.cache_entry or "",
         "reason": result.answer.reason.value if result.answer.reason else "",
     }
     logger.info(
@@ -1024,6 +1127,7 @@ def build_asker(
     provider: AnswerProvider | None = None,
     count_tokens: TokenCounter = conservative_tokens,
     limits: JevLimits = DEFAULT_LIMITS,
+    cache: AnswerCache | None = None,
 ) -> QAAsker:
     """Wire the pipeline; real clients are created from ``settings`` if omitted."""
     if jev is None:
@@ -1041,7 +1145,7 @@ def build_asker(
             model=settings.answer_model,
             max_tokens=settings.answer_max_tokens,
         )
-    return QAAsker(corpus, settings, jev, provider, count_tokens, limits)
+    return QAAsker(corpus, settings, jev, provider, count_tokens, limits, cache)
 
 
 AskerFactory = Callable[[Corpus, QASettings], Asker]

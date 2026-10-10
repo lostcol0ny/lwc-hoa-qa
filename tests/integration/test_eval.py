@@ -10,7 +10,7 @@ import yaml
 from pydantic import ValidationError
 from qa_fakes import FINES_DRAFT, FIXTURE, FakeJev, FakeProvider
 
-from hoa_qa.ask import AskResult, QAAsker, QASettings, build_asker
+from hoa_qa.ask import STAGES, AskResult, QAAsker, QASettings, build_asker
 from hoa_qa.cli import main
 from hoa_qa.eval import (
     Check,
@@ -465,9 +465,9 @@ def test_runner_with_the_real_asker_and_fake_providers(tmp_path: Path) -> None:
     assert code == 0, report
     assert report["cases"][0]["cited"] == ["rules-2023-fines"]
     assert 0 < report["total_cost_usd"] <= report["max_cost_usd"]
-    stages = ["gate", "sweep", "answer", "verify"]
-    assert list(report["cases"][0]["stage_ms"]) == stages
-    assert list(report["stage_p50_ms"]) == stages
+    assert list(report["cases"][0]["stage_ms"]) == list(STAGES)
+    # The median leaves out stages that never ran (no cache is attached).
+    assert list(report["stage_p50_ms"]) == ["gate", "sweep", "answer", "verify"]
 
 
 def test_runner_records_diagnostics_for_traceable_askers(tmp_path: Path) -> None:

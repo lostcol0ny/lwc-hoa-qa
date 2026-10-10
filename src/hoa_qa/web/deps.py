@@ -21,6 +21,7 @@ from hoa_qa import models
 from hoa_qa.ask import QASettings
 from hoa_qa.ask import build_asker as build_qa_asker
 from hoa_qa.budget import BudgetStore
+from hoa_qa.cache import AnswerCache, load_cache
 from hoa_qa.web.ratelimit import RateLimiter
 from hoa_qa.web.settings import WebSettings
 
@@ -88,6 +89,21 @@ async def get_asker(request: Request) -> Asker:
     return state.asker
 
 
+def load_answer_cache(path: Path) -> AnswerCache | None:
+    """The curated answer cache, or None if there is none or it can't be read.
+
+    The cache only makes answers faster, so a missing or broken file must
+    never stop the app from starting.
+    """
+    if not path.is_file():
+        return None
+    try:
+        return load_cache(path)
+    except Exception as exc:
+        logger.error("answer cache unreadable error_type=%s", type(exc).__name__)
+        return None
+
+
 def build_asker(settings: WebSettings, env: Mapping[str, str] | None = None) -> Asker:
     """The QA core's asker over the configured corpus (or the dev fake).
 
@@ -105,7 +121,9 @@ def build_asker(settings: WebSettings, env: Mapping[str, str] | None = None) -> 
     try:
         qa_settings = QASettings.from_env(env)
         # Typed assignment: pyright checks QAAsker against the Asker protocol.
-        asker: Asker = build_qa_asker(corpus, qa_settings)
+        asker: Asker = build_qa_asker(
+            corpus, qa_settings, cache=load_answer_cache(settings.answer_cache_path)
+        )
     except Exception as exc:
         # e.g. a missing API key. Log the type only; messages may hold config.
         logger.error("building the asker failed error_type=%s", type(exc).__name__)

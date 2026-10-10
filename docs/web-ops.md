@@ -87,6 +87,7 @@ the same way:
 | `RATE_LIMIT_PER_HOUR`, `RATE_LIMIT_PER_DAY` | `10`, `50` | App-level per-IP limits |
 | `HOA_DOCUMENTS_URL` | `https://lakewoodcreekhoa.com/` | Document link for budget-exhausted answers and the page; the same variable the QA core uses for refusals. Must be `https://` |
 | `CORPUS_PATH` | `corpus.json` | Corpus location |
+| `ANSWER_CACHE_PATH` | `answer_cache.json` | Optional curated answer cache. A missing or unreadable file is not an error |
 | `HOA_QA_FAKE_ASKER` | unset | `1` = canned dev answers (ignored in production) |
 | `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`, `ANSWER_MODEL`, ... | | Read by the QA core's `QASettings`, not by the web layer |
 | `VERCEL`, `VERCEL_ENV` | set by Vercel | `VERCEL=1` enables trusting `x-forwarded-for`; `VERCEL_ENV=production` enables the fail-closed rules below |

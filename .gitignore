@@ -12,6 +12,7 @@ htmlcov/
 !.env.example
 corpus.json
 corpus_manifest.json
+answer_cache.json
 build/
 dist/
 .vercel/
