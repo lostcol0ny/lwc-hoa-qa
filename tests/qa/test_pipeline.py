@@ -159,9 +159,9 @@ def test_invented_claim_never_reaches_answer_text(
     answer = result.answer
     assert "exempt" not in answer.answer_text
     assert "Seniors" not in " ".join(answer.conflicts_noted)
-    # It regenerated once (naming the failed claim), then dropped it and noted so.
-    assert len(provider.prompts) == 2
-    assert INVENTED.statement in provider.prompts[1].user
+    # The draft stands without the invented side claim, so it is dropped and
+    # noted, with no second call to the answer model.
+    assert len(provider.prompts) == 1
     assert answer.outcome is Outcome.answered
     assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
     assert [c.quote for c in answer.citations] == ["3rd violation: $125."]
@@ -170,9 +170,17 @@ def test_invented_claim_never_reaches_answer_text(
 def test_regenerate_fixes_failed_claim(
     corpus: Corpus, settings: QASettings, jev: FakeJev
 ) -> None:
+    """A draft that cannot stand (an essential claim failed) is regenerated."""
     jev.support = invented_unsupported
-    provider = FakeProvider([draft(FINE_CLAIM, INVENTED), FINES_DRAFT])
+    essential_invention = claim(
+        "Fines are exempt for first-time owners.",
+        ("rules-2023-fines", "2nd violation: $75."),
+        essential=True,
+    )
+    provider = FakeProvider([draft(FINE_CLAIM, essential_invention), FINES_DRAFT])
     answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert len(provider.prompts) == 2
+    assert essential_invention.statement in provider.prompts[1].user
     assert answer.outcome is Outcome.answered
     assert answer.answer_text == FINE_CLAIM.statement  # no omission note
 
@@ -350,30 +358,15 @@ def test_build_asker_requires_keys_for_real_clients(corpus: Corpus) -> None:
         build_asker(corpus, QASettings())
 
 
-def test_worse_retry_falls_back_to_the_verified_first_attempt(
-    corpus: Corpus, settings: QASettings, jev: FakeJev
-) -> None:
-    """Live eval: attempt 1 was sound but for a side claim; attempt 2 broke."""
-    jev.support = invented_unsupported
-    essential_invention = claim(
-        "Fines are exempt for first-time owners.",
-        ("rules-2023-fines", "2nd violation: $75."),
-    )
-    provider = FakeProvider([draft(FINE_CLAIM, INVENTED), draft(essential_invention)])
-    answer = ask(make_asker(corpus, settings, jev, provider)).answer
-    assert len(provider.prompts) == 2
-    assert answer.outcome is Outcome.answered
-    assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
-    assert "exempt" not in answer.answer_text
-
-
 @pytest.mark.parametrize("retry", [None, draft()], ids=["invalid", "no-claims"])
-def test_unusable_retry_falls_back_to_the_first_attempt(
+def test_a_draft_that_can_stand_is_never_retried(
     corpus: Corpus, settings: QASettings, jev: FakeJev, retry
 ) -> None:
+    """Whatever a second draft would have been, it is not asked for."""
     jev.support = invented_unsupported
     provider = FakeProvider([draft(FINE_CLAIM, INVENTED), retry])
     answer = ask(make_asker(corpus, settings, jev, provider)).answer
+    assert len(provider.prompts) == 1
     assert answer.outcome is Outcome.answered
     assert answer.answer_text == f"{FINE_CLAIM.statement} {OMITTED_NOTE}"
 
@@ -406,14 +399,19 @@ def test_retry_says_why_each_claim_was_rejected(
         essential=False,
     )
     jev.support = invented_unsupported
-    provider = FakeProvider([draft(FINE_CLAIM, fake_quote, INVENTED)] * 2)
+    # An essential claim fails too, so the draft cannot stand and is retried.
+    essential = claim(
+        "Fines are exempt for first-time owners.",
+        ("rules-2023-fines", "2nd violation: $75."),
+    )
+    provider = FakeProvider([draft(FINE_CLAIM, fake_quote, essential)] * 2)
     ask(make_asker(corpus, settings, jev, provider))
     retry = provider.prompts[1].user
     assert (
-        f"{fake_quote.statement} (no quote was found verbatim in the cited passage)"
-        in retry
+        f"{fake_quote.statement} "
+        "(it cited a sentence number or passage that does not exist)" in retry
     )
-    assert f"{INVENTED.statement} (the cited passages do not state all of it)" in retry
+    assert f"{essential.statement} (the cited passages do not state all of it)" in retry
 
 
 def test_claims_dropped_by_salvage_add_the_omitted_note(

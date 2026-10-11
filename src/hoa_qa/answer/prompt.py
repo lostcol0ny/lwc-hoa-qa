@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from hoa_qa.models import Authority, Chunk
+from hoa_qa.sentences import number_sentences
 
 # Hard caps on the model's output shape (validated in answer.provider).
 MAX_CLAIMS = 8
@@ -122,10 +123,11 @@ answer claim; false for helpful context and for conflict claims.
 passages themselves (what kind of document they are, what they do not \
 mention, or how they relate to the question) as a claim: leave out anything \
 the passages do not state.
-- citations: 1 to {MAX_CITATIONS_PER_CLAIM} per claim. chunk_id must be the \
-chunk_id of a provided passage. quote must be copied EXACTLY, character for \
-character, from that passage's text: a short contiguous span, not a \
-paraphrase and not stitched from separate parts.
+- citations: 1 to {MAX_CITATIONS_PER_CLAIM} per claim. Each passage's text is \
+split into numbered sentences: [1], [2], and so on. chunk_id must be the \
+chunk_id of a provided passage, and sentence the number of the one sentence \
+in it that states the fact. Do not copy the sentence's text; the app quotes \
+it for you. If two sentences are needed, cite each as its own citation.
 - confidence: 0 to 1, how well the passages answer the question.
 - refer_to_board: true for legal, liability, violation, or dispute \
 questions; do not write the referral yourself.
@@ -137,7 +139,7 @@ confidence to 0.
 # The first five are verification failures; the rest describe an invalid
 # draft (see answer.provider.DraftIssue) and never quote the model's output.
 REJECTION_REASONS = {
-    "no_valid_quote": "no quote was found verbatim in the cited passage",
+    "no_valid_quote": "it cited a sentence number or passage that does not exist",
     "unsupported": "the cited passages do not state all of it",
     "low_authority": "it cites only informal or superseded passages",
     "informal_as_current": ("it presents an informal or superseded source as current"),
@@ -181,8 +183,8 @@ AUTHORITY_FEEDBACK = (
 )
 
 RETRY_FEEDBACK = (
-    "Your previous answer was rejected. Each quote must be copied exactly from "
-    "the text of the passage whose chunk_id you give, and the cited passages "
+    "Your previous answer was rejected. Each citation must give the chunk_id of "
+    "a passage above and the number of a sentence in it, and the cited passages "
     "must fully support the claim's statement. Keep every statement to one "
     f"fact of at most {MAX_STATEMENT_CHARS} characters: split, don't merge. "
     "Try again using only the passages above."
@@ -223,7 +225,7 @@ def render_passage(chunk: Chunk) -> str:
         f'citation_label="{_attr(chunk.citation_label)}" '
         f'authority="{chunk.authority.value}" '
         f'effective_date="{effective}"{note_attr}>\n'
-        f"{defang(chunk.text_clean)}\n"
+        f"{defang(number_sentences(chunk.text_clean))}\n"
         "</passage>"
     )
 

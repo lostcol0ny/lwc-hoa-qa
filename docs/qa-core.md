@@ -18,11 +18,11 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 | 1. Validate | `ask.clean_question` | Drop control (`Cc`) and format (`Cf`, e.g. zero-width, bidi) characters, collapse whitespace, then require 1–500 characters. No model calls. | `invalid_input` |
 | 2. Gate | `retrieval/gate.py` | One Jev `Noul`: is `message` a question a resident might ask their HOA (its rules, fees, governance, amenities, or anything about a home, yard, or life in the neighborhood that HOA rules could cover)? The criteria list examples (decorations, antennas, fences, sheds, trash cans, parking, pets, neighbor issues as HOA matters). The gate only keeps out abuse and off-topic use (poems, homework, chat, bare instructions); whether the documents answer is the sweep's job. The question is sent as state (data), never inside the instructions. | `refused_off_topic`, with a link to the documents; the answer model is never called |
 | 3. Sweep | `retrieval/sweep.py` | One `Noul` per chunk ("Does the passage `passages.p3` (heading: …) help answer the question?"; a passage that answers part of it counts), batched **per `doc_id`, at most 8 passages per request**. Passages are keyed by name, not list position, and each question repeats its passage's heading: with positional references (`passages[30]`) in long lists the judge scored neighbors instead of the passage asked about. How each chunk is sent is planned once per corpus, sized for the longest possible question (`plan_passages`): whole, split into sub-passages (its score is the best of its parts), or skipped. Those passages are then packed per document for the actual question, and a document over Jev's limits is split across requests. Keep the top `SWEEP_TOP_K` at or above `SWEEP_THRESHOLD`; ties keep corpus order. | `not_found` (`reason: no_relevant_passages`; "couldn't find it; contact the Board") with no free-form answer |
-| 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, quote}`. The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. Structured outputs don't support length keywords (`maxLength`, `maxItems`), so the caps are stated in the schema's `description`s and in the prompt ("one atomic fact per claim; split compound statements"), built from the same constants, and enforced locally. | `not_found` (`reason: no_answer_in_passages`) if the model returns no claims |
-| 5a. Quote check | `verify/quotes.py` | Per citation: the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, curly quotes, ellipses (`…` = `...`) and dashes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
+| 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, sentence}`. Each passage is shown split into numbered sentences (`[1] ...`, `hoa_qa/sentences.py`) and the model cites a sentence by number; it never retypes passage text. Code copies the cited sentence in as the quote, so a quote cannot be mistyped and costs no output tokens (quotes were about 44% of the model's output, and a mistyped one was behind half the retries in the 2026-10-10 eval). The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. Structured outputs don't support length keywords (`maxLength`, `maxItems`), so the caps are stated in the schema's `description`s and in the prompt ("one atomic fact per claim; split compound statements"), built from the same constants, and enforced locally. | `not_found` (`reason: no_answer_in_passages`) if the model returns no claims |
+| 5a. Quote check | `verify/quotes.py` | `resolve_sentences` turns each `{chunk_id, sentence}` into that sentence's text; a number the passage doesn't have, or a passage that wasn't shown, leaves no quote. Then, per citation (including the hand-written quotes of reviewed cache claims): the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, curly quotes, ellipses (`…` = `...`) and dashes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
 | 5a′. Authority rule | `ask.py` | See [Source authority](#source-authority-support-is-not-authority). An `answer` claim may only rest on citations outside `informal`/`superseded` when a `statute`/`governing`/`rules`/`board_decision` passage was provided. Statute-backed claims that give advice fail as `advice_phrasing`. | |
 | 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Each passage carries its `source` (citation label), `authority` and `effective_date` from the corpus next to its `text`, so attributions ("under the 2023 Rules") can be judged. Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
-| 5c. Retry | `ask.py` | If any claim fails, or no answer claim survives, or the output was invalid, regenerate **once**, listing the failed claims by number (`claim 2: <statement> (<reason>)`), each with a code-written reason (quote not found, not fully supported, informal-only, informal-as-current, advice phrasing), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. For an invalid draft the entries are code-written only, by claim number, never the draft's text (`claim 2: its statement was over the 400-character limit; split it ...`, or output-level: cut off, too many claims, malformed); at most 8, so `max_cost_usd` still bounds the retry prompt. If a claim broke the authority rule, the retry also says so, and every retry restates the length rule. Then apply the drop rule below. | `not_found` (`reason: unverified`) |
+| 5c. Retry | `ask.py` | If the draft **cannot stand** under the drop rule below (an essential answer claim failed, or no answer claim survived), or the output was invalid, regenerate **once**, listing the failed claims by number (`claim 2: <statement> (<reason>)`), each with a code-written reason (cited sentence or passage doesn't exist, not fully supported, informal-only, informal-as-current, advice phrasing), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. For an invalid draft the entries are code-written only, by claim number, never the draft's text (`claim 2: its statement was over the 400-character limit; split it ...`, or output-level: cut off, too many claims, malformed); at most 8, so `max_cost_usd` still bounds the retry prompt. If a claim broke the authority rule, the retry also says so, and every retry restates the length rule. Then apply the drop rule below. | `not_found` (`reason: unverified`) |
 | 6. Respond | `ask.py` | Compose the `Answer` from verified claims only (see below): `Citation.url = citation_url(chunk)`, the §5 disclaimer, and a uuid4 `request_id`. | `answered` |
 
 ### How the answer text is built, and the claim-drop rule
@@ -42,22 +42,19 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
   rephrasing, or see: ...") and lists up to 5 `related_documents`
   (`{title, url}`): whole documents the model cited, then the other
   retrieved ones. Only titles and document URLs, never passage or claim text.
-- **Drop rule** (after the one regenerate):
-  - If any **essential** `answer` claim still fails, the result is `not_found`.
-  - If no `answer` claim survives, the result is `not_found`.
+- **Drop rule** (applied to every verified draft):
+  - If any **essential** `answer` claim fails, the draft cannot stand.
+  - If no `answer` claim survives, the draft cannot stand.
   - Otherwise the failed claims are dropped, the survivors are returned as
     `answered`, and `OMITTED_NOTE` is appended.
-  - If the regenerated draft can't stand (or is invalid, or empty) but the
-    first draft could under this rule, the first draft is used, with its
-    failed claims dropped. Its surviving claims were verified the same way.
 
-  Any failed claim triggers the retry, even when the first draft could
-  already stand with it dropped. That is deliberate for now (the retry
-  often repairs side claims), but it costs a second answer call and adds
-  variance: in eval run 5 a first draft stating "$452 per year" failed only
-  a non-essential claim, and the retry rephrased the dues as "$113 per
-  quarter". Possible cost/variance optimization: when only non-essential
-  claims fail, drop them without retrying.
+  A draft that can stand is used at once, on the first attempt too. Only a
+  draft that cannot stand is regenerated, and if the second one cannot stand
+  either the result is `not_found`. Until 2026-10-11 any failed claim
+  triggered a retry, to repair side details; that cost a second answer-model
+  call (the slowest step by far: a median 12.7 s against 4.1 s in the
+  2026-10-10 eval) on 8 of 26 questions, 5 of which could already stand, and
+  the retry sometimes came back worse.
 
   A failed `conflict` claim never blocks the answer, even if marked essential:
   the verified answer is correct without the note. The `essential` flag can
@@ -412,7 +409,7 @@ never ran is 0, and `cache_ms` overlaps `gate_ms` because the two run together),
 `jev_input_tokens`,
 `answer_model`, `answer_calls`, `answer_input_tokens`, `answer_output_tokens`,
 `citations`, `estimated_cost_usd`, `notes` (`invalid_draft`, `no_claims`,
-`claims_failed=N`, `used_first_attempt`, `cache_hit`, `cache_exact`,
+`claims_failed=N`, `cache_hit`, `cache_exact`,
 `cache_error`), `cache` (the curated entry id served, or empty), and `reason`.
 
 Two diagnostics records explain a `not_found`:

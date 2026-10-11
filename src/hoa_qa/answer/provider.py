@@ -27,10 +27,19 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2048
 
 
 class DraftCitation(BaseModel):
+    """Where a claim comes from.
+
+    The answer model cites a numbered sentence of a passage and code copies
+    that sentence in as ``quote`` (``verify.quotes.resolve_sentences``), so a
+    quote can't be mistyped and costs no output tokens. A reviewed claim in
+    the curated cache gives the ``quote`` itself instead.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     chunk_id: str
-    quote: str
+    sentence: int | None = Field(default=None, ge=1)
+    quote: str = ""
 
 
 class DraftClaim(BaseModel):
@@ -63,8 +72,17 @@ class AnswerDraft(BaseModel):
 
 _CITATION_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {"chunk_id": {"type": "string"}, "quote": {"type": "string"}},
-    "required": ["chunk_id", "quote"],
+    "properties": {
+        "chunk_id": {"type": "string"},
+        "sentence": {
+            "type": "integer",
+            "description": (
+                "The number in [brackets] of the one sentence in that passage "
+                "that states the fact."
+            ),
+        },
+    },
+    "required": ["chunk_id", "sentence"],
     "additionalProperties": False,
 }
 

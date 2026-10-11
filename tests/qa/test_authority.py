@@ -211,6 +211,11 @@ def test_conflict_claim_presenting_informal_figure_as_current_is_dropped(
     assert answer.outcome is Outcome.answered
     assert answer.conflicts_noted == ()
     assert answer.answer_text.startswith(RULES_ANSWER.statement)
+    assert len(provider.prompts) == 1, "the answer stands without the conflict"
+
+    # With nothing else to stand on, the draft is retried and told why.
+    provider = FakeProvider([draft(as_current), draft(RULES_ANSWER)])
+    ask(make_asker(corpus, settings, blog_first(jev), provider))
     assert "presents an informal or superseded source as current" in (
         provider.prompts[1].user
     )
