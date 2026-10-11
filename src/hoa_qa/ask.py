@@ -92,7 +92,12 @@ from hoa_qa.retrieval.sweep import (
 )
 from hoa_qa.trace import NO_TRACE, AskTrace, CitationTrace, ClaimTrace
 from hoa_qa.traced import TracedJev, TracedProvider
-from hoa_qa.verify.quotes import CheckedCitation, check_quotes, normalize
+from hoa_qa.verify.quotes import (
+    CheckedCitation,
+    check_quotes,
+    normalize,
+    resolve_sentences,
+)
 from hoa_qa.verify.support import (
     ClaimEvidence,
     check_support,
@@ -676,9 +681,6 @@ class QAAsker:
         # Provided passages the model cited, in order, for an unverified
         # not_found's related-document links (never their text).
         cited_ids: list[str] = []
-        # A first attempt that could stand with its failed claims dropped; a
-        # retry that turns out worse falls back to it.
-        fallback: tuple[AnswerDraft, list[_Verified]] | None = None
         for attempt in range(1, 3):
             prompt = build_prompt(
                 cleaned,
@@ -741,9 +743,11 @@ class QAAsker:
                 return self._answered(draft, verified, dropped=generated.claims_trimmed)
             usage.notes.append(f"claims_failed={len(failures)}")
             if can_drop:
-                if attempt == 2:
-                    return self._answered(draft, verified, dropped=True)
-                fallback = (draft, verified)
+                # The draft stands without its failed claims, so it is used as
+                # it is. Asking again to repair a side detail cost a second
+                # answer-model call (the slowest step, by far) and sometimes
+                # came back worse.
+                return self._answered(draft, verified, dropped=True)
             failed = [
                 rejected(v.statement, v.reason, index)
                 for index, v in enumerate(verified, start=1)
@@ -751,9 +755,6 @@ class QAAsker:
             ]
             authority_failed = any(v.reason in _AUTHORITY_REASONS for v in failures)
             invalid_output = False
-        if fallback is not None:
-            usage.notes.append("used_first_attempt")
-            return self._answered(*fallback, dropped=True)
         return self._not_found(
             OutcomeReason.unverified, self._related_documents(cited_ids, passages)
         )
@@ -856,6 +857,18 @@ class QAAsker:
     ) -> list[_Verified]:
         by_id = {chunk.id: chunk for chunk in passages}
         authoritative = any(chunk.authority in AUTHORITATIVE for chunk in passages)
+        # The model cites sentence numbers; from here on each citation carries
+        # that sentence's text, exactly as a quoted citation would.
+        draft = draft.model_copy(
+            update={
+                "claims": [
+                    claim.model_copy(
+                        update={"citations": resolve_sentences(claim.citations, by_id)}
+                    )
+                    for claim in draft.claims
+                ]
+            }
+        )
         checked = [tuple(check_quotes(c.citations, by_id)) for c in draft.claims]
         screened = [
             _authority_screen(claim, cites, authoritative=authoritative)

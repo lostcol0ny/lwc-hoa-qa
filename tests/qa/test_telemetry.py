@@ -356,9 +356,9 @@ def test_retry_and_dropped_claims_are_tags(
     corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
 ) -> None:
     side = claim("Not in the text.", ("rules-2023-fines", "nope"), essential=False)
-    result = ask(
-        corpus, settings, jev, FakeProvider([draft(FINES_DRAFT.claims[0], side)])
-    )
+    bad = draft(claim("Not in the text.", ("rules-2023-fines", "nope")))
+    kept_with_a_drop = draft(FINES_DRAFT.claims[0], side)
+    result = ask(corpus, settings, jev, FakeProvider([bad, kept_with_a_drop]))
     assert result.answer_calls == 2
     assert tags_of(spans) == ("answered", "retried", "claims-dropped")
     assert result.tags == tags_of(spans)

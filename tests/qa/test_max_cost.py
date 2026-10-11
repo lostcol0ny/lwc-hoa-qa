@@ -76,7 +76,8 @@ class ByteJev:
 
 
 class ByteProvider:
-    """Cites the prompt's passages with maximal claims; one always fails."""
+    """Cites the prompt's passages with maximal claims; an essential one
+    always fails, so the draft cannot stand and both attempts run."""
 
     model = "claude-haiku-4-5"
 
@@ -98,7 +99,7 @@ class ByteProvider:
                 DraftClaim(
                     statement=statement,
                     kind="answer",
-                    essential=i != 7,
+                    essential=True,
                     citations=[
                         DraftCitation(chunk_id=c, quote=self._by_id[c].text_clean[:30])
                         for c in cited
@@ -233,7 +234,7 @@ def test_max_cost_bounds_byte_billing(
     # claims cite chunks too large for any support request, so they fail
     # closed (not_found); elsewhere support runs on both attempts.
     assert provider.calls == 2
+    assert result.answer.outcome is Outcome.not_found
     if corpus_name != "boundaries":
-        assert result.answer.outcome is Outcome.answered
         assert jev.support_calls >= 2
     assert asker.max_cost_usd >= result.estimated_cost_usd > 0

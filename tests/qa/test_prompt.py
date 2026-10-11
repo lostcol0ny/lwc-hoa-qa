@@ -13,6 +13,7 @@ from hoa_qa.answer.prompt import (
 )
 from hoa_qa.answer.provider import ANSWER_SCHEMA, DraftClaim
 from hoa_qa.models import Corpus
+from hoa_qa.sentences import split_sentences
 
 
 def test_system_prompt_policy() -> None:
@@ -37,7 +38,8 @@ def test_passages_carry_metadata(corpus: Corpus) -> None:
     for chunk in corpus.chunks:
         assert f'chunk_id="{chunk.id}"' in prompt.user
         assert f'authority="{chunk.authority.value}"' in prompt.user
-        assert chunk.text_clean in prompt.user
+        for number, sentence in enumerate(split_sentences(chunk.text_clean), 1):
+            assert f"[{number}] {sentence}\n" in prompt.user
     assert 'effective_date="2023-10-24"' in prompt.user
     assert 'citation_label="Rules 2023, Fines, p. 15"' in prompt.user
     assert 'note="superseded by rules-2023; no longer in effect"' in prompt.user

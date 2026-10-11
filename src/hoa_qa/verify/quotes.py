@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from hoa_qa.answer.provider import DraftCitation
 from hoa_qa.models import Chunk
+from hoa_qa.sentences import split_sentences
 
 _QUOTE_MAP = str.maketrans(
     {
@@ -35,6 +36,31 @@ def normalize(text: str) -> str:
     """Fold typography and punctuation spacing without joining words or digits."""
     text = _WHITESPACE.sub(" ", text.translate(_QUOTE_MAP)).strip().casefold()
     return _PUNCTUATION_SPACE.sub(r"\1", text)
+
+
+def resolve_sentences(
+    citations: Sequence[DraftCitation], passages: Mapping[str, Chunk]
+) -> list[DraftCitation]:
+    """Fill in the quote of every citation that names a sentence number.
+
+    A number the passage doesn't have, or a passage that wasn't provided,
+    leaves the quote empty, and ``check_quotes`` then drops the citation.
+    Citations that already carry a quote are returned unchanged.
+    """
+    resolved: list[DraftCitation] = []
+    for citation in citations:
+        if citation.sentence is None:
+            resolved.append(citation)
+            continue
+        chunk = passages.get(citation.chunk_id)
+        sentences = split_sentences(chunk.text_clean) if chunk else ()
+        in_range = 0 < citation.sentence <= len(sentences)
+        resolved.append(
+            citation.model_copy(
+                update={"quote": sentences[citation.sentence - 1] if in_range else ""}
+            )
+        )
+    return resolved
 
 
 @dataclass(frozen=True)
