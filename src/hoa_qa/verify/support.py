@@ -114,6 +114,10 @@ async def check_support(
         lambda group: support_request([c for _, c in group]),
         count_tokens,
         limits,
+        # One claim per request: a claim is judged against only its own
+        # passages (unrelated state costs Jev accuracy), and a streamed claim
+        # can be checked the moment it arrives, the same way a batch is.
+        max_items=1,
     )
     for index, _ in oversized:
         logger.warning("support check skipped oversized claim index=%d", index)

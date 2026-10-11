@@ -270,12 +270,15 @@ def test_support_is_judged_per_claim(
 ) -> None:
     jev.support = invented_unsupported
     ask(make_asker(corpus, settings, jev, FakeProvider([draft(FINE_CLAIM, INVENTED)])))
-    state, questions = next(c for c in jev.calls if "c0" in c[1])
-    assert [c["statement"] for c in state["claims"]] == [
-        FINE_CLAIM.statement,
-        INVENTED.statement,
+    requests = [c for c in jev.calls if "c0" in c[1]]
+    # One request per claim, each carrying only that claim and its passages.
+    assert [[c["statement"] for c in state["claims"]] for state, _ in requests] == [
+        [FINE_CLAIM.statement],
+        [INVENTED.statement],
     ]
-    assert "`claims[1].statement`" in questions["c1"].instructions
+    for _, questions in requests:
+        assert list(questions) == ["c0"]
+        assert "`claims[0].statement`" in questions["c0"].instructions
 
 
 def test_all_claims_fail_regenerates_once_then_not_found(

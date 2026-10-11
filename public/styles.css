@@ -439,3 +439,8 @@ h3 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform
   .spinner { animation: none; } /* the loading text already says it's working */
   .send { transition: none; }
 }
+
+/* The answer while it is still being written: same card, held back a little
+   until the final version (with its sources) replaces it. */
+.result.preview { opacity: 0.85; }
+.result.preview .answer-text { margin-top: 0.6rem; }

@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -279,6 +279,17 @@ class Asker(Protocol):
     async def __call__(self, question: str) -> AskResult: ...
 
 
+# Progress events for a caller that shows the answer as it forms (the web
+# app's streaming endpoint). Each is a small JSON-able dict with a "type":
+# "stage" as a stage starts, "claim" when a claim has passed every check, and
+# "reset" when a draft could not stand and is being written again.
+Emit = Callable[[dict[str, Any]], None]
+
+
+def _no_emit(event: dict[str, Any]) -> None:
+    pass
+
+
 def clean_question(question: str) -> str | None:
     """Strip control/format characters; None if empty or over the length cap."""
     chars = []
@@ -511,7 +522,12 @@ class QAAsker:
         return await self.ask_traced(question, NO_TRACE)
 
     async def ask_traced(
-        self, question: str, trace: AskTrace, *, reviewed: AnswerDraft | None = None
+        self,
+        question: str,
+        trace: AskTrace,
+        *,
+        reviewed: AnswerDraft | None = None,
+        emit: Emit = _no_emit,
     ) -> AskResult:
         """``__call__`` reporting each stage to ``trace`` (eval diagnostics only).
 
@@ -520,7 +536,7 @@ class QAAsker:
         """
         with telemetry.span("ask", "chain") as root:
             root.input(question)
-            asked = await self._ask(question, trace, reviewed)
+            asked = await self._ask(question, trace, reviewed, emit)
             answer = asked.answer
             root.output(
                 {"answer": answer.answer_text, "conflicts": answer.conflicts_noted}
@@ -552,14 +568,18 @@ class QAAsker:
             return asked
 
     async def _ask(
-        self, question: str, trace: AskTrace, reviewed: AnswerDraft | None
+        self,
+        question: str,
+        trace: AskTrace,
+        reviewed: AnswerDraft | None,
+        emit: Emit,
     ) -> AskResult:
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         usage = _Usage(model=self._provider.model)
         try:
             if reviewed is None:
-                result = await self._run(question, usage, trace, request_id)
+                result = await self._run(question, usage, trace, request_id, emit)
             else:
                 result = await self._run_reviewed(question, reviewed, usage, trace)
         except Exception as exc:  # any provider failure becomes an error outcome
@@ -606,7 +626,12 @@ class QAAsker:
         return asked
 
     async def _run(
-        self, question: str, usage: _Usage, trace: AskTrace, request_id: str
+        self,
+        question: str,
+        usage: _Usage,
+        trace: AskTrace,
+        request_id: str,
+        emit: Emit,
     ) -> _Result:
         s = self._settings
         cleaned = clean_question(question)
@@ -627,6 +652,7 @@ class QAAsker:
             trace.cache(exact, 1.0, 1, exact=True)
             return _cached(exact)
         # The lookup runs alongside the gate, so a miss adds no latency.
+        emit({"type": "stage", "stage": "gate"})
         looking = asyncio.ensure_future(self._lookup(cleaned, usage, limit, request_id))
         try:
             with _timed(usage, "gate") as span:
@@ -653,6 +679,7 @@ class QAAsker:
             usage.cache_entry = found.entry.id
             usage.notes.append("cache_hit")
             return _cached(found.entry)
+        emit({"type": "stage", "stage": "sweep", "passages": len(self._plan.passages)})
 
         with _timed(usage, "sweep") as span:
             swept = await sweep(
@@ -669,6 +696,7 @@ class QAAsker:
         usage.jev_input_tokens += swept.input_tokens
         trace.sweep(swept.scores, swept.selected)
         _log_sweep(request_id, swept.selected)
+        emit({"type": "stage", "stage": "draft", "selected": len(swept.selected)})
         if not swept.selected:
             return self._not_found(OutcomeReason.no_relevant_passages)
 
@@ -689,8 +717,18 @@ class QAAsker:
                 authority_note=authority_failed,
                 invalid_output=invalid_output,
             )
+            # Claims the model has finished writing, each already being
+            # verified while it writes the rest (streamed runs only).
+            early: list[tuple[DraftClaim, asyncio.Task[_Verified]]] = []
             with _timed(usage, "answer", name=f"draft {attempt}") as span:
-                generated = await self._provider.generate(prompt)
+                streaming = getattr(self._provider, "generate_streaming", None)
+                if emit is _no_emit or streaming is None:
+                    generated = await self._provider.generate(prompt)
+                else:
+                    generated = await streaming(
+                        prompt,
+                        self._early_checker(early, passages, limit, usage, emit),
+                    )
                 span.set(attempt=attempt, passages=len(passages))
             usage.answer_calls += 1
             usage.answer_input_tokens += generated.input_tokens
@@ -724,7 +762,7 @@ class QAAsker:
                 if c.chunk_id in passage_ids and c.chunk_id not in cited_ids:
                     cited_ids.append(c.chunk_id)
             with _timed(usage, "verify", name=f"verify {attempt}") as span:
-                verified = await self._verify(draft, passages, limit, usage)
+                verified = await self._verified(draft, early, passages, limit, usage)
                 _trace_verify(span, verified)
             trace.attempt(attempt, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
@@ -748,6 +786,8 @@ class QAAsker:
                 # answer-model call (the slowest step, by far) and sometimes
                 # came back worse.
                 return self._answered(draft, verified, dropped=True)
+            # This draft cannot stand: whatever it showed so far is withdrawn.
+            emit({"type": "reset"})
             failed = [
                 rejected(v.statement, v.reason, index)
                 for index, v in enumerate(verified, start=1)
@@ -847,6 +887,69 @@ class QAAsker:
                 found.error_type,
             )
         return found
+
+    def _early_checker(
+        self,
+        early: list[tuple[DraftClaim, asyncio.Task[_Verified]]],
+        passages: Sequence[Chunk],
+        limit: asyncio.Semaphore,
+        usage: _Usage,
+        emit: Emit,
+    ) -> Callable[[DraftClaim], None]:
+        """The provider's ``on_claim`` callback: start verifying each claim
+        the moment it arrives, and remember the task in ``early``."""
+
+        def on_claim(claim: DraftClaim) -> None:
+            check = self._verify_early(claim, passages, limit, usage, emit)
+            early.append((claim, asyncio.ensure_future(check)))
+
+        return on_claim
+
+    async def _verify_early(
+        self,
+        claim: DraftClaim,
+        passages: Sequence[Chunk],
+        limit: asyncio.Semaphore,
+        usage: _Usage,
+        emit: Emit,
+    ) -> _Verified:
+        """Verify one claim as soon as the model has written it, and announce
+        it if it holds. The checks are exactly those of ``_verify``."""
+        alone = AnswerDraft(claims=[claim], confidence=0, refer_to_board=False)
+        [verified] = await self._verify(alone, passages, limit, usage)
+        if verified.ok and verified.kind == "answer":
+            emit({"type": "claim", "statement": verified.statement.strip()})
+        return verified
+
+    async def _verified(
+        self,
+        draft: AnswerDraft,
+        early: Sequence[tuple[DraftClaim, asyncio.Task[_Verified]]],
+        passages: Sequence[Chunk],
+        limit: asyncio.Semaphore,
+        usage: _Usage,
+    ) -> list[_Verified]:
+        """Every claim of the complete draft, verified.
+
+        With no early results (a run that isn't streamed) this is ``_verify``.
+        Otherwise each claim reuses its early result when the complete draft
+        has that same claim in that position, and is verified now if not (the
+        early parse skipped it, or the draft was trimmed).
+        """
+        if not early:
+            return await self._verify(draft, passages, limit, usage)
+        try:
+            results: list[_Verified] = []
+            for index, claim in enumerate(draft.claims):
+                if index < len(early) and early[index][0] == claim:
+                    results.append(await early[index][1])
+                else:
+                    alone = draft.model_copy(update={"claims": [claim]})
+                    results.extend(await self._verify(alone, passages, limit, usage))
+            return results
+        finally:
+            for _, task in early:
+                task.cancel()
 
     async def _verify(
         self,

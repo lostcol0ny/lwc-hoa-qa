@@ -11,7 +11,7 @@ from typing import Any
 from hoa_qa import telemetry
 from hoa_qa.answer.pricing import answer_price, jev_cost_usd
 from hoa_qa.answer.prompt import AnswerPrompt
-from hoa_qa.answer.provider import AnswerProvider, ProviderResult
+from hoa_qa.answer.provider import AnswerProvider, OnClaim, ProviderResult
 from hoa_qa.retrieval.jev import (
     JevClient,
     NoulBatchResult,
@@ -118,8 +118,27 @@ class TracedProvider:
         return self._inner.max_tokens
 
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
+        return await self._traced(prompt, None)
+
+    async def generate_streaming(
+        self, prompt: AnswerPrompt, on_claim: OnClaim
+    ) -> ProviderResult:
+        """Stream when the wrapped provider can; otherwise a plain ``generate``."""
+        return await self._traced(prompt, on_claim)
+
+    async def _call(
+        self, prompt: AnswerPrompt, on_claim: OnClaim | None
+    ) -> ProviderResult:
+        streaming = getattr(self._inner, "generate_streaming", None)
+        if on_claim is not None and streaming is not None:
+            return await streaming(prompt, on_claim)
+        return await self._inner.generate(prompt)
+
+    async def _traced(
+        self, prompt: AnswerPrompt, on_claim: OnClaim | None
+    ) -> ProviderResult:
         if not telemetry.enabled():
-            return await self._inner.generate(prompt)
+            return await self._call(prompt, on_claim)
         with telemetry.span("answer model draft", "generation") as span:
             span.input(
                 [
@@ -127,7 +146,8 @@ class TracedProvider:
                     {"role": "user", "content": prompt.user},
                 ]
             )
-            result = await self._inner.generate(prompt)
+            result = await self._call(prompt, on_claim)
+            span.set(streamed=on_claim is not None)
             price = answer_price(result.model)
             span.model(
                 result.model,

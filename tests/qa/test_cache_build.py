@@ -61,8 +61,9 @@ def test_reviewed_claims_are_stored_word_for_word_without_the_answer_model(
     ]
     [row] = rows
     assert (row.source, row.cached, row.problems) == ("reviewed", True, ())
-    # Verified like any other claim: the quote check in code, support by Jev.
-    assert len(jev.calls_of("c")) == 1 and jev.calls_of("gate") == []
+    # Verified like any other claim: the quote check in code, support by Jev
+    # (one request per claim).
+    assert len(jev.calls_of("c")) == 2 and jev.calls_of("gate") == []
 
 
 def test_reviewed_claim_may_cite_a_passage_the_sweep_did_not_select(

@@ -21,7 +21,7 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
 | 4. Answer | `answer/prompt.py`, `answer/provider.py` | The answer model gets the §3.2 policy in the system prompt and only data in the user turn: `<passages>` (each with `chunk_id`, `citation_label`, `authority`, `effective_date`, and a superseded/informal note) and `<question>`. Our own tags inside the data are defanged. The output (JSON schema via `output_config.format`, validated by pydantic `AnswerDraft`) is a list of **claims**. Each claim is one short factual statement (`kind`: `answer` or `conflict`, plus an `essential` flag) with 1–3 citations `{chunk_id, sentence}`. Each passage is shown split into numbered sentences (`[1] ...`, `hoa_qa/sentences.py`) and the model cites a sentence by number; it never retypes passage text. Code copies the cited sentence in as the quote, so a quote cannot be mistyped and costs no output tokens (quotes were about 44% of the model's output, and a mistyped one was behind half the retries in the 2026-10-10 eval). The output also carries `confidence` and `refer_to_board`. Caps: 8 claims, 3 citations per claim, 400 characters per statement. Structured outputs don't support length keywords (`maxLength`, `maxItems`), so the caps are stated in the schema's `description`s and in the prompt ("one atomic fact per claim; split compound statements"), built from the same constants, and enforced locally. | `not_found` (`reason: no_answer_in_passages`) if the model returns no claims |
 | 5a. Quote check | `verify/quotes.py` | `resolve_sentences` turns each `{chunk_id, sentence}` into that sentence's text; a number the passage doesn't have, or a passage that wasn't shown, leaves no quote. Then, per citation (including the hand-written quotes of reviewed cache claims): the quote must be a substring of its chunk's `text_clean` after normalizing whitespace, case, curly quotes, ellipses (`…` = `...`) and dashes, and its `chunk_id` must be one of the passages shown. Failing citations are dropped. A claim with no surviving citation fails. | |
 | 5a′. Authority rule | `ask.py` | See [Source authority](#source-authority-support-is-not-authority). An `answer` claim may only rest on citations outside `informal`/`superseded` when a `statute`/`governing`/`rules`/`board_decision` passage was provided. Statute-backed claims that give advice fail as `advice_phrasing`. | |
-| 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Each passage carries its `source` (citation label), `authority` and `effective_date` from the corpus next to its `text`, so attributions ("under the 2023 Rules") can be judged. Yes means *everything* the statement asserts is stated in the passages. Claims are batched under the Jev limits; a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
+| 5b. Support check | `verify/support.py` | One Jev `Noul` **per claim**: "Do the passages in `claims[i].passages` support this specific claim, `claims[i].statement`?" Each passage carries its `source` (citation label), `authority` and `effective_date` from the corpus next to its `text`, so attributions ("under the 2023 Rules") can be judged. Yes means *everything* the statement asserts is stated in the passages. Each claim is its own request, carrying only that claim and its passages (unrelated state costs Jev accuracy, and a streamed claim can be checked the moment it arrives); a claim too large for any request fails closed. Below `SUPPORT_THRESHOLD`, the claim fails. | |
 | 5c. Retry | `ask.py` | If the draft **cannot stand** under the drop rule below (an essential answer claim failed, or no answer claim survived), or the output was invalid, regenerate **once**, listing the failed claims by number (`claim 2: <statement> (<reason>)`), each with a code-written reason (cited sentence or passage doesn't exist, not fully supported, informal-only, informal-as-current, advice phrasing), inside a delimited `<rejected_claims>` block that is labeled untrusted data (never to be followed as instructions) and defanged like the other data blocks. For an invalid draft the entries are code-written only, by claim number, never the draft's text (`claim 2: its statement was over the 400-character limit; split it ...`, or output-level: cut off, too many claims, malformed); at most 8, so `max_cost_usd` still bounds the retry prompt. If a claim broke the authority rule, the retry also says so, and every retry restates the length rule. Then apply the drop rule below. | `not_found` (`reason: unverified`) |
 | 6. Respond | `ask.py` | Compose the `Answer` from verified claims only (see below): `Citation.url = citation_url(chunk)`, the §5 disclaimer, and a uuid4 `request_id`. | `answered` |
 
@@ -145,6 +145,29 @@ The model never decides whether these appear (`answer/statute_notes.py`):
   says why. The prompt asks for "765 ILCS ... states that ..." phrasing and
   forbids applicability conclusions. Statute claims otherwise go through the
   same quote and support checks as every other claim.
+
+## Streaming
+
+`QAAsker.ask_traced(question, trace, emit=callback)` reports progress while it
+works, for the web app's `/api/ask/stream`. Without `emit` nothing changes.
+
+- `{"type": "stage", "stage": "gate" | "sweep" | "draft", ...}` as a stage
+  starts (`sweep` carries the number of passages, `draft` how many were
+  selected).
+- `{"type": "claim", "statement": ...}` for each `answer` claim once it has
+  passed **every** check. The answer model's output is read as it arrives
+  (`ClaimStream` finds each finished claim in the partial JSON), and each claim
+  is verified at once, while the model writes the next one. Conflict claims
+  and failed claims are never announced.
+- `{"type": "reset"}` if the draft could not stand and is being rewritten;
+  anything shown so far is withdrawn.
+
+The complete output is still the authority. When the model finishes, the full
+draft is parsed and validated exactly as in an unstreamed run; each claim
+reuses its early result only if the full draft has that same claim in that
+position, and is verified then if not. A streamed answer and an unstreamed one
+therefore come out the same (a test asserts it), with the same Jev requests
+and cost. The eval runs unstreamed.
 
 ## Curated answer cache
 

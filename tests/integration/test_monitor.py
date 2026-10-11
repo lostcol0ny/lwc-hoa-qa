@@ -282,3 +282,81 @@ def test_operator_questions_are_tagged_in_traces() -> None:
     finally:
         telemetry.use(None)
         provider.shutdown()
+
+
+def read_stream(response) -> list[dict]:
+    events = []
+    for block in response.text.split("\n\n"):
+        if block.startswith("data: "):
+            events.append(json.loads(block[len("data: ") :]))
+    return events
+
+
+def test_stream_endpoint_sends_progress_then_the_same_answer() -> None:
+    h, _, provider = real_harness()
+    plain = h.client.post("/api/ask", json={"question": SECRET}).json()
+    response = h.client.post("/api/ask/stream", json={"question": SECRET})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-store"
+    events = read_stream(response)
+    assert [e["type"] for e in events] == ["stage", "stage", "stage", "claim", "answer"]
+    answer = events[-1]["answer"]
+    assert answer["outcome"] == "answered"
+    assert events[3]["statement"] == answer["answer_text"]
+    for key in ("answer_text", "citations", "outcome", "disclaimer"):
+        assert answer[key] == plain[key]
+    assert provider.streamed == 1
+    # Budgeted and recorded like any other question.
+    feed = h.client.get("/api/monitor/recent", headers=AUTH).json()
+    assert feed["summary"]["requests"] == 2
+    assert all(row["cost_usd"] > 0 for row in feed["rows"])
+
+
+def test_stream_endpoint_refuses_with_plain_json() -> None:
+    h, jev, _ = real_harness()
+    for _ in range(10):
+        h.client.post("/api/ask/stream", json={"question": "poem"})
+    limited = h.client.post("/api/ask/stream", json={"question": SECRET})
+    assert limited.status_code == 429
+    assert limited.headers["content-type"].startswith("application/json")
+    assert limited.json()["outcome"] == "error"
+    invalid = h.client.post("/api/ask/stream", json={"question": ""})
+    assert invalid.status_code == 422 and invalid.json()["outcome"] == "invalid_input"
+    cross = h.client.post(
+        "/api/ask/stream",
+        json={"question": SECRET},
+        headers={"origin": "https://evil.example"},
+    )
+    assert cross.status_code == 403
+
+
+def test_stream_endpoint_reports_a_failure_as_an_answer_event() -> None:
+    h, _, _ = real_harness()
+
+    class Broken:
+        max_cost_usd = 0.01
+
+        async def ask_traced(self, question, trace, *, emit):
+            emit({"type": "stage", "stage": "gate"})
+            raise RuntimeError("the question was: " + question)
+
+        async def __call__(self, question):
+            raise AssertionError("not used")
+
+    h.app.state.asker = Broken()
+    response = h.client.post("/api/ask/stream", json={"question": SECRET})
+    events = read_stream(response)
+    assert [e["type"] for e in events] == ["stage", "answer"]
+    assert events[-1]["answer"]["outcome"] == "error"
+    assert "Quail Run" not in response.text
+
+
+def test_stream_endpoint_works_with_an_asker_that_cannot_stream() -> None:
+    from web_fakes import build_harness as plain_harness
+
+    h = plain_harness(env=ENV)
+    response = h.client.post("/api/ask/stream", json={"question": SECRET})
+    events = read_stream(response)
+    assert [e["type"] for e in events] == ["answer"]
+    assert events[0]["answer"]["outcome"] == "answered"
