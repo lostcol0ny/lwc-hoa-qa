@@ -15,12 +15,14 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 
+from hoa_qa import telemetry
 from hoa_qa.ask import AskerFactory, AskResult, QASettings, build_asker
 from hoa_qa.cache import (
     AnswerCache,
@@ -335,6 +337,9 @@ def main(
 ) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    # Traces go to Langfuse when its keys are set (hoa_qa.telemetry); the
+    # provider flushes what is queued when the process exits.
+    telemetry.configure(os.environ)
     if args.command == "cache":
         if args.cache_command == "build":
             return _run_cache_build(args, asker_factory)
