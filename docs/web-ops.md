@@ -300,6 +300,13 @@ their scores, each claim's verdict.
 Add a tag only for something with a handful of possible values; anything with
 many (an id, a model name) belongs in metadata.
 
+Tags, trace metadata and the release are copied onto **every span** of the
+trace, not only the root. Langfuse filters and totals per observation, and cost
+sits on the model-request spans, so "cost of retried questions" only works if
+those spans carry the tag. The labels are only known once the question is
+answered, so `TraceLabelProcessor` holds a trace's spans until its root span
+ends, stamps them, and passes them on together.
+
 **Turning it on.**
 
 1. Create a Langfuse project and copy its public and secret keys.
@@ -516,14 +523,14 @@ One-time setup:
 - **Pull request:** preview deployment. **Push to `main`:** production.
 - A successful **Build corpus** run on `main` automatically redeploys production:
   merge → build → redeploy, including monthly and manual rebuilds. No manual
-  Deploy re-run is needed. Failed/cancelled builds leave the deploy job visibly
+  Deploy re-run is needed. Failed/canceled builds leave the deploy job visibly
   skipped. The `workflow_run` branch filter excludes manual builds on other
   branches (see [GitHub's branch-filter documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#limiting-your-workflow-to-run-based-on-branches)).
 - Push and eligible successful corpus deploys share one production concurrency
   group with in-progress cancellation disabled. Only the newest pending
-  production deploy is kept; superseded pending runs show as cancelled. This
+  production deploy is kept; superseded pending runs show as canceled. This
   is harmless because each deploy uses current `main` and the newest successful
-  corpus available when it selects the artifact. Failed/cancelled builds and
+  corpus available when it selects the artifact. Failed/canceled builds and
   ineligible events use unique noop groups, so they cannot displace a pending
   production deploy. Corpus runs originating from PRs or other repositories
   are also excluded.

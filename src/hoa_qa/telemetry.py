@@ -23,6 +23,7 @@ import base64
 import json
 import logging
 import re
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -30,8 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from opentelemetry import context as otel_context
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Status, StatusCode
 
@@ -50,6 +52,75 @@ _extra_tags: ContextVar[tuple[str, ...]] = ContextVar("extra_tags", default=())
 
 # Langfuse observation types (langfuse.observation.type).
 Kind = Literal["span", "generation", "chain", "retriever", "guardrail", "evaluator"]
+
+
+# Trace-level labels, which Langfuse needs on every span of a trace (not only
+# the root) to filter and total by them: cost sits on the model-request spans,
+# so "cost of retried questions" only works if those spans carry the tag.
+_TRACE_LABEL_PREFIXES = ("langfuse.trace.", "langfuse.release")
+
+
+class TraceLabelProcessor(SpanProcessor):
+    """Copy the root span's trace-level labels onto every span of its trace.
+
+    The labels (outcome, cache result, retried, ...) are only known when the
+    question has been answered, by which time its child spans have ended and
+    can no longer be changed. So child spans are held here until their root
+    ends, labeled, and then passed on together. A trace whose root never
+    arrives is passed on unlabeled once ``max_traces`` newer ones are waiting.
+    """
+
+    def __init__(self, inner: SpanProcessor, max_traces: int = 256) -> None:
+        self._inner = inner
+        self._max_traces = max_traces
+        self._held: dict[int, list[ReadableSpan]] = {}
+        self._lock = threading.Lock()
+
+    def on_start(
+        self, span: Any, parent_context: otel_context.Context | None = None
+    ) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        context = span.get_span_context()
+        if context is None:
+            self._inner.on_end(span)
+            return
+        overflow: list[ReadableSpan] = []
+        with self._lock:
+            if span.parent is not None:
+                self._held.setdefault(context.trace_id, []).append(span)
+                if len(self._held) > self._max_traces:
+                    overflow = self._held.pop(next(iter(self._held)))
+                children = None
+            else:
+                children = self._held.pop(context.trace_id, [])
+        for orphan in overflow:
+            self._inner.on_end(orphan)
+        if children is None:
+            return
+        labels = {
+            key: value
+            for key, value in (span.attributes or {}).items()
+            if key.startswith(_TRACE_LABEL_PREFIXES)
+        }
+        for child in children:
+            # An ended span is read-only through its public API; replacing the
+            # mapping is the only way to add to it before export.
+            child._attributes = {**(child.attributes or {}), **labels}
+            self._inner.on_end(child)
+        self._inner.on_end(span)
+
+    def shutdown(self) -> None:
+        with self._lock:
+            waiting = [span for spans in self._held.values() for span in spans]
+            self._held.clear()
+        for span in waiting:
+            self._inner.on_end(span)
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._inner.force_flush(timeout_millis)
 
 
 @dataclass
@@ -123,7 +194,9 @@ def configure(env: Mapping[str, str]) -> bool:
     endpoint, headers = target
     exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers, timeout=5)
     provider = TracerProvider(resource=Resource.create({"service.name": "hoa-qa"}))
-    provider.add_span_processor(BatchSpanProcessor(exporter, max_queue_size=4096))
+    provider.add_span_processor(
+        TraceLabelProcessor(BatchSpanProcessor(exporter, max_queue_size=4096))
+    )
     use(
         provider,
         content=env.get("TRACE_CONTENT", "").strip() == "1",

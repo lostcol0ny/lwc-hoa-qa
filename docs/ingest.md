@@ -257,7 +257,7 @@ PDF − 5 throughout its body). That modal offset is applied to every page from
 printed page 1 through the last detected footer, which fills footers OCR missed
 (Declaration PDF pp. 6–15). A disagreeing footer is logged and overridden. A label
 never mixes numbering: if either end of a range has no printed number, the whole
-label uses `PDF p./pp.`. Example: Declaration §8.4 is PDF pp. 28–29, labelled
+label uses `PDF p./pp.`. Example: Declaration §8.4 is PDF pp. 28–29, labeled
 "Declaration, Article 8, §8.4, pp. 23–24".
 
 ### Sectioning
@@ -267,7 +267,7 @@ label uses `PDF p./pp.`. Example: Declaration §8.4 is PDF pp. 28–29, labelled
   "…indemnified. Axticle 13 Aysessments") and `N.M[.K]` sections.
 - **Rules 2023 / 2016:** upper-case `SECTION N` and `N.M`; sections without
   numbered subsections split on lettered subsections (`A. Intent`, `B. Fines`…),
-  keyed and labelled `rules-2023-3.B`, "Rules 2023, Section 3.B (Fines), PDF p. 9".
+  keyed and labeled `rules-2023-3.B`, "Rules 2023, Section 3.B (Fines), PDF p. 9".
 - **Monotonic numbering:** every numbered heading must be a plausible *next* key
   after the previous one (a sibling up to +3, a first child, the next article, or
   N.1–N.9 right after an article heading). OCR that drops or misreads dots is
@@ -296,7 +296,7 @@ label uses `PDF p./pp.`. Example: Declaration §8.4 is PDF pp. 28–29, labelled
 - **Web pages:** one chunk per FAQ Q&A; one chunk for the banner facts.
 - The architectural form stays in one chunk. Long sections split into stable
   `-a`/`-b` parts at sentence boundaries and never combine sections.
-- Intro chunks are labelled with the title once (no "Declaration, Declaration").
+- Intro chunks are labeled with the title once (no "Declaration, Declaration").
   Display titles fix source typos ("December 2O" → "December 20", trailing
   spaces); URLs are unchanged.
 

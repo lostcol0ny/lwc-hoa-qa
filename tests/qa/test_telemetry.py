@@ -411,3 +411,94 @@ def test_release_is_set_on_the_trace(
     ask(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
     [root] = by_name(spans, "ask")
     assert attr(root, "langfuse.release") == "0850cec1a2b3"
+
+
+@pytest.fixture
+def labeled() -> Iterator[InMemorySpanExporter]:
+    """Spans as they are exported in production: through TraceLabelProcessor."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        telemetry.TraceLabelProcessor(SimpleSpanProcessor(exporter))
+    )
+    telemetry.use(provider, release="0850cec1a2b3")
+    yield exporter
+    telemetry.use(None)
+    provider.shutdown()
+
+
+def test_every_span_of_a_trace_carries_its_labels(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, labeled: InMemorySpanExporter
+) -> None:
+    """Cost sits on the model-request spans, so totaling cost by tag needs
+    the tags there, not only on the root."""
+    side = claim("Not in the text.", ("rules-2023-fines", "nope"), essential=False)
+    # The first draft cannot stand, so it is retried; the second drops a side
+    # claim. That gives the trace every kind of tag at once.
+    bad = draft(claim("Not in the text.", ("rules-2023-fines", "nope")))
+    provider = FakeProvider([bad, draft(FINES_DRAFT.claims[0], side)])
+    with telemetry.tagged("monitor"):
+        ask(corpus, settings, jev, provider)
+    finished = labeled.get_finished_spans()
+    assert len(finished) > 10
+    for span in finished:
+        assert attr(span, "langfuse.trace.tags") == (
+            "answered",
+            "retried",
+            "claims-dropped",
+            "monitor",
+        ), span.name
+        assert attr(span, "langfuse.trace.name") == "ask"
+        assert attr(span, "langfuse.release") == "0850cec1a2b3"
+        assert attr(span, "langfuse.trace.metadata.answer_model") == "claude-haiku-4-5"
+    # Each span keeps what it recorded itself.
+    generation = by_name(labeled, "answer model draft")[0]
+    assert attr(generation, "gen_ai.request.model") == "claude-haiku-4-5"
+    assert attr(generation, "langfuse.observation.type") == "generation"
+    # The root is exported last, after the children it labeled.
+    assert finished[-1].name == "ask"
+
+
+def test_labels_do_not_leak_between_traces(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, labeled: InMemorySpanExporter
+) -> None:
+    jev.match = {QUIET: 0.97}
+    cache = make_cache(corpus)
+    provider = FakeProvider([FINES_DRAFT])
+    ask(corpus, settings, jev, provider, "When are quiet hours?", cache=cache)
+    jev.match = {}
+    ask(corpus, settings, jev, provider, QUESTION, cache=cache)
+    by_trace: dict[int, set[tuple[str, ...]]] = {}
+    for span in labeled.get_finished_spans():
+        by_trace.setdefault(ctx(span).trace_id, set()).add(
+            attr(span, "langfuse.trace.tags")
+        )
+    assert sorted(by_trace.values(), key=str) == [
+        {("answered", "cache-hit")},
+        {("answered", "cache-miss")},
+    ]
+
+
+def test_spans_without_a_root_are_still_exported() -> None:
+    exporter = InMemorySpanExporter()
+    processor = telemetry.TraceLabelProcessor(
+        SimpleSpanProcessor(exporter), max_traces=2
+    )
+    provider = TracerProvider()
+    provider.add_span_processor(processor)
+    tracer = provider.get_tracer("test")
+    roots = [tracer.start_span(f"root {n}") for n in range(4)]
+    for n, root in enumerate(roots):
+        from opentelemetry import trace as otel_trace
+
+        with otel_trace.use_span(root, end_on_exit=False):
+            tracer.start_span(f"child {n}").end()
+    # Four traces are waiting for roots that never ended; only two are held.
+    assert [s.name for s in exporter.get_finished_spans()] == ["child 0", "child 1"]
+    provider.shutdown()
+    assert sorted(s.name for s in exporter.get_finished_spans()) == [
+        "child 0",
+        "child 1",
+        "child 2",
+        "child 3",
+    ]
