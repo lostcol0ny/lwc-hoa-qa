@@ -238,3 +238,22 @@ def test_recent_list_is_capped_and_newest_first() -> None:
         rows = [json.loads(r)["n"] for r in asyncio.run(scenario(store))]
         assert rows == [4, 3, 2]
     assert fake.ttls["k"] == 60
+
+
+def test_each_answer_flushes_its_trace_before_responding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A serverless function freezes after responding, so traces go out first."""
+    flushed: list[str] = []
+
+    async def fake_flush(timeout_ms: int = 0) -> None:
+        flushed.append("flush")
+
+    monkeypatch.setattr("hoa_qa.web.app.telemetry.flush_async", fake_flush)
+    h, _, _ = real_harness()
+    assert h.client.get("/api/health").status_code == 200
+    assert h.client.get("/api/monitor/recent", headers=AUTH).status_code == 200
+    assert flushed == [], "only question endpoints flush"
+    assert h.client.post("/api/ask", json={"question": SECRET}).status_code == 200
+    h.client.post("/api/monitor/ask", json={"question": SECRET}, headers=AUTH)
+    assert flushed == ["flush", "flush"]

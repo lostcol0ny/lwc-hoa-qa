@@ -20,6 +20,7 @@ from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from hoa_qa import telemetry
 from hoa_qa.answer.pricing import answer_cost_usd, answer_price, jev_cost_usd
 from hoa_qa.answer.prompt import (
     MAX_CITATIONS_PER_CLAIM,
@@ -84,11 +85,13 @@ from hoa_qa.retrieval.jev import (
 from hoa_qa.retrieval.sweep import (
     ScoredChunk,
     SweepPassage,
+    SweepResult,
     batch_request,
     plan_passages,
     sweep,
 )
 from hoa_qa.trace import NO_TRACE, AskTrace, CitationTrace, ClaimTrace
+from hoa_qa.traced import TracedJev, TracedProvider
 from hoa_qa.verify.quotes import CheckedCitation, check_quotes, normalize
 from hoa_qa.verify.support import (
     ClaimEvidence,
@@ -112,6 +115,14 @@ DEFAULT_JEV_CONCURRENCY = 16
 # "cache" (the curated-answer lookup) runs alongside "gate", so those two
 # overlap; the rest run one after another.
 STAGES = ("gate", "cache", "sweep", "answer", "verify")
+# How each stage's span is labeled in the trace viewer.
+_SPAN_KINDS: dict[str, telemetry.Kind] = {
+    "gate": "guardrail",
+    "cache": "retriever",
+    "sweep": "retriever",
+    "answer": "chain",
+    "verify": "evaluator",
+}
 
 DISCLAIMER = (
     "Unofficial tool, not legal advice; the governing documents and the Board "
@@ -296,15 +307,19 @@ class _Usage:
 
 
 @contextmanager
-def _timed(usage: _Usage, stage: str) -> Iterator[None]:
-    """Add the block's wall-clock time to ``usage.stage_ms[stage]``.
+def _timed(
+    usage: _Usage, stage: str, *, name: str | None = None
+) -> Iterator[telemetry.Observation]:
+    """Time the block into ``usage.stage_ms[stage]`` and trace it as a span.
 
-    Recorded even when the block raises, so an error outcome still shows
-    where the time went.
+    The time is recorded even when the block raises, so an error outcome
+    still shows where it went. The span (a no-op with tracing off) is yielded
+    so the stage can attach what it decided.
     """
     started = time.perf_counter()
     try:
-        yield
+        with telemetry.span(name or stage, _SPAN_KINDS[stage]) as span:
+            yield span
     finally:
         usage.stage_ms[stage] += (time.perf_counter() - started) * 1000
 
@@ -494,6 +509,33 @@ class QAAsker:
         ``reviewed`` (cache builds only) is an operator-written draft to
         verify in place of asking the answer model; see ``_run_reviewed``.
         """
+        with telemetry.span("ask", "chain") as root:
+            root.input(question)
+            asked = await self._ask(question, trace, reviewed)
+            answer = asked.answer
+            root.output(
+                {"answer": answer.answer_text, "conflicts": answer.conflicts_noted}
+            )
+            root.set(
+                request_id=answer.request_id,
+                outcome=answer.outcome.value,
+                reason=answer.reason.value if answer.reason else None,
+                cache_entry=asked.cache_entry,
+                citations=len(answer.citations),
+                cost_usd=round(asked.estimated_cost_usd, 6),
+                jev_input_tokens=asked.jev_input_tokens,
+                answer_input_tokens=asked.answer_input_tokens,
+                answer_output_tokens=asked.answer_output_tokens,
+                reviewed=reviewed is not None,
+            )
+            root.trace(name="ask", tags=[answer.outcome.value])
+            if answer.outcome is Outcome.error:
+                root.error("pipeline_error")
+            return asked
+
+    async def _ask(
+        self, question: str, trace: AskTrace, reviewed: AnswerDraft | None
+    ) -> AskResult:
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         usage = _Usage(model=self._provider.model)
@@ -567,8 +609,12 @@ class QAAsker:
         # The lookup runs alongside the gate, so a miss adds no latency.
         looking = asyncio.ensure_future(self._lookup(cleaned, usage, limit, request_id))
         try:
-            with _timed(usage, "gate"):
+            with _timed(usage, "gate") as span:
                 gate = await run_gate(self._jev, cleaned, s.gate_threshold)
+                span.set(threshold=s.gate_threshold)
+                span.output(
+                    {"probability": gate.probability, "passed": gate.passed}, text=False
+                )
         finally:
             # Let the lookup finish either way, so its tokens are counted.
             found = await looking
@@ -588,7 +634,7 @@ class QAAsker:
             usage.notes.append("cache_hit")
             return _cached(found.entry)
 
-        with _timed(usage, "sweep"):
+        with _timed(usage, "sweep") as span:
             swept = await sweep(
                 self._jev,
                 cleaned,
@@ -599,6 +645,7 @@ class QAAsker:
                 count_tokens=self._count_tokens,
                 limits=self._limits,
             )
+            _trace_sweep(span, swept, s)
         usage.jev_input_tokens += swept.input_tokens
         trace.sweep(swept.scores, swept.selected)
         _log_sweep(request_id, swept.selected)
@@ -625,8 +672,9 @@ class QAAsker:
                 authority_note=authority_failed,
                 invalid_output=invalid_output,
             )
-            with _timed(usage, "answer"):
+            with _timed(usage, "answer", name=f"draft {attempt}") as span:
                 generated = await self._provider.generate(prompt)
+                span.set(attempt=attempt, passages=len(passages))
             usage.answer_calls += 1
             usage.answer_input_tokens += generated.input_tokens
             usage.answer_output_tokens += generated.output_tokens
@@ -658,8 +706,9 @@ class QAAsker:
             for c in (c for claim in draft.claims for c in claim.citations):
                 if c.chunk_id in passage_ids and c.chunk_id not in cited_ids:
                     cited_ids.append(c.chunk_id)
-            with _timed(usage, "verify"):
+            with _timed(usage, "verify", name=f"verify {attempt}") as span:
                 verified = await self._verify(draft, passages, limit, usage)
+                _trace_verify(span, verified)
             trace.attempt(attempt, [v.trace for v in verified], generated.note)
             failures = [v for v in verified if not v.ok]
             can_drop = _can_drop(verified)
@@ -711,7 +760,7 @@ class QAAsker:
         if cleaned is None:
             return _Result(Outcome.invalid_input, "The question is empty or too long.")
         limit = asyncio.Semaphore(s.jev_concurrency)
-        with _timed(usage, "sweep"):
+        with _timed(usage, "sweep") as span:
             swept = await sweep(
                 self._jev,
                 cleaned,
@@ -722,6 +771,7 @@ class QAAsker:
                 count_tokens=self._count_tokens,
                 limits=self._limits,
             )
+            _trace_sweep(span, swept, s)
         usage.jev_input_tokens += swept.input_tokens
         trace.sweep(swept.scores, swept.selected)
         by_id = {chunk.id: chunk for chunk in self._corpus.chunks}
@@ -733,8 +783,9 @@ class QAAsker:
                 provided.add(chunk.id)
                 passages.append(chunk)
         trace.passages(passages)
-        with _timed(usage, "verify"):
+        with _timed(usage, "verify") as span:
             verified = await self._verify(draft, passages, limit, usage)
+            _trace_verify(span, verified)
         trace.attempt(1, [v.trace for v in verified], "reviewed")
         if all(v.ok for v in verified) and _has_answer(verified):
             return self._answered(draft, verified, dropped=False)
@@ -747,13 +798,25 @@ class QAAsker:
         if not self._cache_entries:
             return MISS
         try:
-            with _timed(usage, "cache"):
+            with _timed(usage, "cache") as span:
                 found = await lookup(
                     self._jev,
                     question,
                     self._cache_entries,
                     threshold=self._settings.cache_threshold,
                     limit=limit,
+                )
+                span.set(
+                    threshold=self._settings.cache_threshold,
+                    candidates=found.candidates,
+                    requests=found.requests,
+                )
+                span.output(
+                    {
+                        "hit": found.entry.id if found.entry else None,
+                        "probability": found.probability,
+                    },
+                    text=False,
                 )
         except Exception as exc:
             # lookup() already turns provider failures into a miss; this
@@ -926,6 +989,53 @@ class QAAsker:
             close = getattr(client, "aclose", None)
             if close is not None:
                 await close()
+
+
+def _trace_sweep(
+    span: telemetry.Observation, swept: SweepResult, settings: QASettings
+) -> None:
+    """Which passages were selected, by id and score (no passage text)."""
+    span.set(
+        requests=swept.requests,
+        passages_judged=len(swept.scores),
+        selected=len(swept.selected),
+        threshold=settings.sweep_threshold,
+        top_k=settings.sweep_top_k,
+        input_tokens=swept.input_tokens,
+    )
+    span.output(
+        {
+            "selected": [
+                {"chunk_id": s.chunk.id, "score": round(s.probability, 4)}
+                for s in swept.selected
+            ],
+            "next_best": [
+                {"chunk_id": s.chunk.id, "score": round(s.probability, 4)}
+                for s in swept.scores[len(swept.selected) : len(swept.selected) + 5]
+            ],
+        },
+        text=False,
+    )
+
+
+def _trace_verify(span: telemetry.Observation, verified: Sequence[_Verified]) -> None:
+    """Each claim's verdict. The statements are text, so they appear only
+    when content tracing is on; the counts and reasons always do."""
+    failed = [v.reason for v in verified if not v.ok]
+    span.set(claims=len(verified), kept=len(verified) - len(failed), failed=failed)
+    span.output(
+        [
+            {
+                "statement": v.statement,
+                "kind": v.kind,
+                "kept": v.ok,
+                "reason": v.reason,
+                "support": v.trace.support,
+                "cited": [c.chunk.id for c in v.citations],
+            }
+            for v in verified
+        ]
+    )
 
 
 def _cached(entry: CacheEntry) -> _Result:
@@ -1203,7 +1313,16 @@ def build_asker(
             model=settings.answer_model,
             max_tokens=settings.answer_max_tokens,
         )
-    return QAAsker(corpus, settings, jev, provider, count_tokens, limits, cache)
+    # Every model request becomes a span when tracing is on (hoa_qa.telemetry).
+    return QAAsker(
+        corpus,
+        settings,
+        TracedJev(jev, settings.jev_model),
+        TracedProvider(provider),
+        count_tokens,
+        limits,
+        cache,
+    )
 
 
 AskerFactory = Callable[[Corpus, QASettings], Asker]

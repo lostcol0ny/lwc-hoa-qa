@@ -89,6 +89,10 @@ the same way:
 | `CORPUS_PATH` | `corpus.json` | Corpus location |
 | `ANSWER_CACHE_PATH` | `answer_cache.json` | Optional curated answer cache. A missing or unreadable file is not an error |
 | `MONITOR_TOKEN` | unset | Turns on the operator monitor (see "Operator monitor"). At least 24 characters; unset or shorter means off |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | unset | Turn on tracing to Langfuse (see "Tracing"). Both are needed |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Langfuse region or self-hosted URL; must be https |
+| `TRACE_CONTENT` | unset | `1` also records question, prompt, passage, claim and answer text in traces |
+| `TRACE_ENVIRONMENT` | `VERCEL_ENV`, else `development` | Environment label on traces |
 | `HOA_QA_FAKE_ASKER` | unset | `1` = canned dev answers (ignored in production) |
 | `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`, `ANSWER_MODEL`, ... | | Read by the QA core's `QASettings`, not by the web layer |
 | `VERCEL`, `VERCEL_ENV` | set by Vercel | `VERCEL=1` enables trusting `x-forwarded-for`; `VERCEL_ENV=production` enables the fail-closed rules below |
@@ -230,6 +234,61 @@ deploy again.
 - A traced question skips the per-IP rate limit (the token is the gate) but
   still reserves and spends from the monthly budget.
 - The trace exposes the prompts and scores. Treat the token like an API key.
+
+## Tracing (OpenTelemetry to Langfuse)
+
+Each question can be recorded as a trace: a tree of timed spans showing how it
+moved through the pipeline. Off unless both Langfuse keys are set.
+
+```
+ask
+├─ gate ............ jev gate
+├─ cache ........... jev cache match
+├─ sweep ........... jev sweep batch (one per request, about 100)
+├─ draft 1 ......... answer model draft
+├─ verify 1 ........ jev support
+└─ draft 2 / verify 2 (only when the answer is regenerated)
+```
+
+Every model request is a "generation" with its model, token usage and cost, so
+Langfuse can total spend per question, per stage and per model. Stage spans
+carry what the stage decided: the gate score, which passages were selected and
+their scores, each claim's verdict.
+
+**Two levels of detail.**
+
+- Numbers and codes are always recorded: scores, tokens, cost, timings,
+  outcomes, passage ids.
+- Text is recorded only with `TRACE_CONTENT=1`: the question, the prompts, the
+  passages sent to the answer model, the claims, the answer. This stores
+  residents' questions at Langfuse, which the request log and the monitor's
+  feed never do. Sweep and support requests record which passages they carried
+  and how long each was, not the passage text: every question sweeps the whole
+  corpus, and the answer model's span already holds the passages that mattered.
+
+**Turning it on.**
+
+1. Create a Langfuse project and copy its public and secret keys.
+2. In Vercel (Production), set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
+   and `LANGFUSE_BASE_URL` for your region (`https://cloud.langfuse.com` EU,
+   the default; `https://us.cloud.langfuse.com` US). Add `TRACE_CONTENT=1` to
+   include text.
+3. Re-run the Deploy workflow.
+4. For the eval: add the two keys as GitHub Actions secrets and
+   `LANGFUSE_BASE_URL` as a repository variable. The Eval workflow always
+   includes text, since the golden questions are committed fixtures, and tags
+   its traces with the `eval` environment.
+
+**Cost of having it on.** The app sends a question's spans before responding,
+because a serverless function is frozen once it responds. That is one short
+HTTP request per answer, bounded at 2 seconds; if Langfuse is slow or down the
+answer is still returned and the failure is logged by type. A normal question
+is about 110 spans, a cache hit about 5.
+
+**It is plain OpenTelemetry.** `hoa_qa/telemetry.py` uses the OpenTelemetry
+SDK and an OTLP/HTTP exporter. The `langfuse.*` attributes are how Langfuse
+finds inputs, outputs and cost; another OTLP backend would ignore them and
+still show the span tree and the `gen_ai.*` usage attributes.
 
 ## Rate limiting
 

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from hoa_qa import telemetry
 from hoa_qa.ask import QASettings
 from hoa_qa.budget import (
     BudgetStore,
@@ -60,6 +61,7 @@ from hoa_qa.web.settings import (
 logger = logging.getLogger("hoa_qa.web")
 
 MAX_QUESTION_CHARS = 500
+TRACED_PATHS = frozenset({"/api/ask", "/api/monitor/ask"})
 PUBLIC_DIR = REPO_ROOT / "public"
 
 Question = Annotated[
@@ -127,6 +129,7 @@ def create_app(
     configure_logging()
     check_sdk_debug_logging(env)
     check_redis_config(env, log=logger)
+    telemetry.configure(env)
     config = settings or WebSettings.from_env(env)
     counter_store = counters or select_counter_store(env)
     budget = budget_store or select_budget_store(env, counter_store)
@@ -137,6 +140,7 @@ def create_app(
         # when the first request builds it (see ``_check_budget_once``).
         warn_if_budget_below_reservation(config, None)
         yield
+        await telemetry.flush_async()
         await aclose_if_present(getattr(app.state, "asker", None))
         stores = (counter_store, getattr(budget, "counters", None))
         for store in {id(store): store for store in stores}.values():
@@ -162,6 +166,19 @@ def create_app(
     app.state.recent_store = counter_store
     app.state.monitor = None
     app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.middleware("http")
+    async def flush_traces(request: Request, call_next: Any) -> Any:
+        """Send a question's trace before its response goes out.
+
+        A serverless function is frozen once it has responded, so spans left
+        in the queue could be lost or arrive with the next request. Costs one
+        short HTTP call per answer, and nothing when tracing is off.
+        """
+        response = await call_next(request)
+        if request.url.path in TRACED_PATHS:
+            await telemetry.flush_async()
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request: Request, exc: RequestValidationError) -> Any:

@@ -433,6 +433,10 @@ rolling feed of the same kind of numbers and codes for the last 200 requests,
 for 7 days. It holds no text either. A question the operator traces through
 the monitor is returned to them in full and is not stored.
 
+Tracing (docs/web-ops.md, "Tracing") is the one place text can be stored: with
+`TRACE_CONTENT=1`, question, prompt, claim and answer text is sent to Langfuse.
+Without that switch, traces hold numbers and codes only.
+
 None of these logs question, answer, claim, or quote text (spec §6), and
 tests assert this.
 
