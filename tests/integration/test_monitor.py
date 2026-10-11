@@ -257,3 +257,28 @@ def test_each_answer_flushes_its_trace_before_responding(
     assert h.client.post("/api/ask", json={"question": SECRET}).status_code == 200
     h.client.post("/api/monitor/ask", json={"question": SECRET}, headers=AUTH)
     assert flushed == ["flush", "flush"]
+
+
+def test_operator_questions_are_tagged_in_traces() -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from hoa_qa import telemetry
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.use(provider)
+    try:
+        h, _, _ = real_harness()
+        h.client.post("/api/monitor/ask", json={"question": SECRET}, headers=AUTH)
+        h.client.post("/api/ask", json={"question": SECRET})
+        roots = [s for s in exporter.get_finished_spans() if s.name == "ask"]
+        tags = [(s.attributes or {}).get("langfuse.trace.tags") for s in roots]
+        assert tags == [("answered", "monitor"), ("answered",)]
+    finally:
+        telemetry.use(None)
+        provider.shutdown()

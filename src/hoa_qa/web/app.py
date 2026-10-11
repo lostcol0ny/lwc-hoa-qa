@@ -354,7 +354,9 @@ def create_app(
         seen = monitor.MonitorRecorder()
         started = time.perf_counter()
         try:
-            result = await traced(body.question, seen)
+            # Lets the operator's own testing be filtered out of the traffic.
+            with telemetry.tagged("monitor"):
+                result = await traced(body.question, seen)
         except Exception as exc:
             logger.error(
                 "asker failed request_id=%s error_type=%s",

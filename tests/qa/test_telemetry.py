@@ -312,3 +312,102 @@ def test_content_tracing_is_off_unless_asked_for() -> None:
         telemetry.use(None)
         if provider is not None:
             provider.shutdown()
+
+
+def tags_of(exporter: InMemorySpanExporter) -> tuple[str, ...]:
+    [root] = by_name(exporter, "ask")
+    return attr(root, "langfuse.trace.tags")
+
+
+def trace_meta(exporter: InMemorySpanExporter, key: str) -> Any:
+    [root] = by_name(exporter, "ask")
+    return attr(root, f"langfuse.trace.metadata.{key}")
+
+
+def test_cache_outcome_is_a_tag(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
+) -> None:
+    cache = make_cache(corpus)
+    jev.match = {QUIET: 0.97}
+    provider = FakeProvider([FINES_DRAFT])
+    ask(corpus, settings, jev, provider, "When are quiet hours?", cache=cache)
+    assert tags_of(spans) == ("answered", "cache-hit")
+    assert trace_meta(spans, "cache_entry") == "quiet-hours"
+
+    spans.clear()
+    ask(corpus, settings, jev, provider, QUIET, cache=cache)
+    assert tags_of(spans) == ("answered", "cache-exact")
+
+    spans.clear()
+    jev.match = {}
+    ask(corpus, settings, jev, provider, QUESTION, cache=cache)
+    assert tags_of(spans) == ("answered", "cache-miss")
+    assert trace_meta(spans, "cache_entry") is None
+
+
+def test_without_a_cache_there_is_no_cache_tag(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
+) -> None:
+    ask(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    assert tags_of(spans) == ("answered",)
+
+
+def test_retry_and_dropped_claims_are_tags(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
+) -> None:
+    side = claim("Not in the text.", ("rules-2023-fines", "nope"), essential=False)
+    result = ask(
+        corpus, settings, jev, FakeProvider([draft(FINES_DRAFT.claims[0], side)])
+    )
+    assert result.answer_calls == 2
+    assert tags_of(spans) == ("answered", "retried", "claims-dropped")
+    assert result.tags == tags_of(spans)
+
+
+def test_trace_metadata_names_the_models_and_corpus(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
+) -> None:
+    result = ask(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    assert trace_meta(spans, "answer_model") == "claude-haiku-4-5"
+    assert trace_meta(spans, "jev_model") == "jev-1.13.0"
+    assert trace_meta(spans, "corpus_built") == (
+        corpus.manifest.build_time.date().isoformat()
+    )
+    assert trace_meta(spans, "cost_usd") == round(result.estimated_cost_usd, 6)
+    assert trace_meta(spans, "reason") is None
+
+
+def test_caller_can_tag_its_own_traces(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
+) -> None:
+    with telemetry.tagged("monitor"):
+        ask(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    assert tags_of(spans) == ("answered", "monitor")
+    spans.clear()
+    ask(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    assert tags_of(spans) == ("answered",), "the tag ends with the block"
+
+
+def test_release_prefers_explicit_then_file_then_vercel(tmp_path) -> None:
+    file = tmp_path / "release.txt"
+    missing = tmp_path / "none.txt"
+    vercel = {"VERCEL_GIT_COMMIT_SHA": "abc123"}
+    assert telemetry.release({}, missing) is None
+    assert telemetry.release(vercel, missing) == "abc123"
+    file.write_text("0850cec1a2b3\n")
+    assert telemetry.release(vercel, file) == "0850cec1a2b3"
+    assert telemetry.release({"RELEASE": "v1.2.0", **vercel}, file) == "v1.2.0"
+    # Not a plain identifier: ignored, and the next source is used.
+    file.write_text("<script>alert(1)</script>")
+    assert telemetry.release(vercel, file) == "abc123"
+    file.write_text("x" * 65)
+    assert telemetry.release({}, file) is None
+
+
+def test_release_is_set_on_the_trace(
+    corpus: Corpus, settings: QASettings, jev: FakeJev, spans: InMemorySpanExporter
+) -> None:
+    telemetry._state.release = "0850cec1a2b3"
+    ask(corpus, settings, jev, FakeProvider([FINES_DRAFT]))
+    [root] = by_name(spans, "ask")
+    assert attr(root, "langfuse.release") == "0850cec1a2b3"

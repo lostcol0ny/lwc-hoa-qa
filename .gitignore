@@ -13,6 +13,7 @@ htmlcov/
 corpus.json
 corpus_manifest.json
 answer_cache.json
+release.txt
 build/
 dist/
 .vercel/
