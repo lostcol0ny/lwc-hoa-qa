@@ -104,7 +104,7 @@ def test_questions_never_enter_page_urls() -> None:
     # Native submission must not serialize question text into a query either.
     assert '<form method="post" action="/api/ask"' in html
     source = (PUBLIC / "app.js").read_text()
-    assert 'fetch("/api/ask", {' in source
+    assert 'fetch("/api/ask/stream", {' in source
     assert 'method: "POST"' in source
     assert "body: JSON.stringify({ question: question })" in source
     assert re.search(

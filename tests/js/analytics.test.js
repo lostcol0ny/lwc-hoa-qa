@@ -62,7 +62,7 @@ test("submitting works without insights and keeps question and answer out of URL
   await new Promise(setImmediate);
   assert.ok(prevented);
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, "/api/ask");
+  assert.equal(requests[0].url, "/api/ask/stream");
   assert.equal(requests[0].options.method, "POST");
   assert.deepEqual(JSON.parse(requests[0].options.body), { question });
   assert.equal(location.href, initialUrl);

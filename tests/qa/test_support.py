@@ -45,10 +45,12 @@ def test_one_noul_per_claim_with_distinct_passages(
     ]
     result = run(jev, claims)
     assert result.supported == (True, False, False)
-    [(state, questions)] = jev.calls
-    # Claim without citations is not sent; duplicate chunk passages collapse.
-    assert len(state["claims"]) == 2 and set(questions) == {"c0", "c1"}
-    assert len(state["claims"][0]["passages"]) == 1
+    # One request per claim. A claim without citations is not sent, and
+    # duplicate chunk passages collapse.
+    assert len(jev.calls) == 2 and result.requests == 2
+    for state, questions in jev.calls:
+        assert len(state["claims"]) == 1 and set(questions) == {"c0"}
+        assert len(state["claims"][0]["passages"]) == 1
     assert result.input_tokens == sum(jev.billed)
 
 

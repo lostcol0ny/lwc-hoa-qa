@@ -201,6 +201,23 @@ Consequences:
 | Upstash errors in the rate limiter | The request is allowed (fail open); see below |
 | Preview deployments without Upstash | In-memory counters (per function instance) |
 
+## Streaming answers
+
+The page asks through `POST /api/ask/stream`, which returns server-sent events
+(`text/event-stream`): `stage`, `claim` and `reset` events as described in
+docs/qa-core.md ("Streaming"), then one `answer` event carrying the same body
+`/api/ask` returns. The `answer` event is the answer; the page shows the
+earlier events as a preview and replaces it with the final card.
+
+- Same origin check, rate limit, budget reservation, request log and traffic
+  feed as `/api/ask`. A question that may not run (rate limited, over budget,
+  invalid) gets the ordinary JSON refusal with its usual status code, not a
+  stream, and the page handles both.
+- If the browser disconnects mid-answer the work is canceled and the budget is
+  settled; with no cost reported, the full reservation stays counted.
+- Traces are flushed after the `answer` event, so tracing adds no wait here.
+- `/api/ask` is unchanged and still works without JavaScript.
+
 ## Operator monitor
 
 `/monitor.html` is a page for the operator, off unless `MONITOR_TOKEN` is set.

@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -173,6 +174,57 @@ class AnswerProvider(Protocol):
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult: ...
 
 
+class ClaimStream:
+    """Find each finished claim in the model's JSON while it is still arriving.
+
+    The output is ``{"claims": [{...}, {...}], "confidence": ..., ...}``, so a
+    claim is complete when the brace that opened it, three levels deep, closes.
+    Only depth and string state are tracked; a claim that doesn't validate is
+    skipped here and judged with the complete draft at the end, which is the
+    only authority on what the model returned.
+    """
+
+    _CLAIM_DEPTH = 3  # root object, claims array, claim object
+
+    def __init__(self) -> None:
+        self._depth = 0
+        self._in_string = False
+        self._escaped = False
+        self._current: list[str] | None = None
+
+    def feed(self, text: str) -> list[DraftClaim]:
+        finished: list[DraftClaim] = []
+        for char in text:
+            if self._current is not None:
+                self._current.append(char)
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif char == "\\":
+                    self._escaped = True
+                elif char == '"':
+                    self._in_string = False
+                continue
+            if char == '"':
+                self._in_string = True
+            elif char in "{[":
+                self._depth += 1
+                if char == "{" and self._depth == self._CLAIM_DEPTH:
+                    self._current = ["{"]
+            elif char in "}]":
+                if char == "}" and self._depth == self._CLAIM_DEPTH:
+                    raw, self._current = "".join(self._current or ()), None
+                    try:
+                        finished.append(DraftClaim.model_validate_json(raw))
+                    except ValidationError:
+                        pass
+                self._depth -= 1
+        return finished
+
+
+OnClaim = Callable[[DraftClaim], None]
+
+
 def parse_draft(text: str) -> AnswerDraft | None:
     return parse_draft_noted(text)[0]
 
@@ -333,6 +385,31 @@ class AnthropicAnswerProvider:
             messages=[{"role": "user", "content": prompt.user}],
             output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
         )
+        return self._result(response)
+
+    async def generate_streaming(
+        self, prompt: AnswerPrompt, on_claim: OnClaim
+    ) -> ProviderResult:
+        """``generate``, calling ``on_claim`` as each claim finishes arriving.
+
+        The returned result is parsed from the complete output exactly as
+        ``generate`` does; the early claims are a preview of it.
+        """
+        claims = ClaimStream()
+        async with self._client.messages.stream(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            system=prompt.system,
+            messages=[{"role": "user", "content": prompt.user}],
+            output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
+        ) as stream:
+            async for text in stream.text_stream:
+                for claim in claims.feed(text):
+                    on_claim(claim)
+            response = await stream.get_final_message()
+        return self._result(response)
+
+    def _result(self, response: Any) -> ProviderResult:
         code = "truncated" if response.stop_reason == "max_tokens" else "malformed"
         parsed = ParsedDraft(
             None,

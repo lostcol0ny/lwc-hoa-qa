@@ -83,6 +83,46 @@ function shouldClearQuestion(outcome) {
   return outcome === "answered" || outcome === "refused_off_topic";
 }
 
+// Split what has arrived of a server-sent event stream into whole events
+// and the unfinished remainder. Each event is one "data: {json}" line
+// followed by a blank line; anything that isn't valid JSON is skipped.
+function parseEvents(buffer) {
+  const events = [];
+  const parts = String(buffer).split("\n\n");
+  const rest = parts.pop();
+  for (const part of parts) {
+    for (const line of part.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        const event = JSON.parse(line.slice(5));
+        if (event && typeof event === "object" && typeof event.type === "string") {
+          events.push(event);
+        }
+      } catch (_) {
+        // A malformed event is ignored; the final answer event is what counts.
+      }
+    }
+  }
+  return { events: events, rest: rest };
+}
+
+// The progress line for a real pipeline stage, or null for one with no line.
+function stageText(event) {
+  const count = function (value, noun) {
+    return Number.isInteger(value) && value > 0 ? value + " " + noun : null;
+  };
+  if (event.stage === "gate") return "Checking your question…";
+  if (event.stage === "sweep") {
+    const passages = count(event.passages, "passages");
+    return "Reading " + (passages || "the HOA documents and Illinois law") + "…";
+  }
+  if (event.stage === "draft") {
+    const selected = count(event.selected, event.selected === 1 ? "passage" : "passages");
+    return "Writing an answer from " + (selected || "what it found") + "…";
+  }
+  return null;
+}
+
 // What an Enter keydown in the question box should do:
 // "submit", "newline" (let the browser insert it), "block" (swallow it) or
 // "ignore" (not ours; leave the event alone). IME composition always wins:
@@ -186,6 +226,8 @@ if (typeof module !== "undefined" && module.exports) {
     isHttpsUrl,
     keyAction,
     shouldClearQuestion,
+    parseEvents,
+    stageText,
     PROGRESS_STAGES,
     progressStage,
     createProgress,
@@ -382,31 +424,86 @@ if (typeof document !== "undefined") {
       );
     }
 
+    function showAnswer(body, question) {
+      setLoading(false);
+      if (body && typeof body === "object" && typeof body.outcome === "string") {
+        renderAnswer(body, question);
+        // Not if they have already started typing the next question.
+        if (shouldClearQuestion(body.outcome) && textarea.value.trim() === question) {
+          textarea.value = "";
+          updateCounter();
+        }
+      } else {
+        renderFailure(question);
+      }
+    }
+
+    // Read the event stream: real stage names replace the timed progress
+    // lines, and each verified sentence of the answer appears as it arrives.
+    // Returns the final answer body, or null if the stream ended without one.
+    async function readStream(response, question) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let preview = null;
+      let live = false;
+      for (;;) {
+        const chunk = await reader.read();
+        buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+        const parsed = parseEvents(buffer);
+        buffer = parsed.rest;
+        for (const event of parsed.events) {
+          if (event.type === "answer") return event.answer;
+          if (!live) {
+            // From here the server says what is happening; stop guessing.
+            live = true;
+            progress.stop();
+            renderLoading();
+          }
+          if (event.type === "stage") {
+            const text = stageText(event);
+            if (text) showProgressLine(text);
+          } else if (event.type === "claim" && typeof event.statement === "string") {
+            if (!preview) {
+              preview = el("article", "result preview");
+              preview.append(el("p", "asked", "You asked: " + question));
+              preview.append(el("p", "answer-text"));
+              answerRegion.append(preview);
+              showProgressLine("Checking each statement against the documents…");
+            }
+            const text = preview.querySelector(".answer-text");
+            text.textContent = (text.textContent ? text.textContent + " " : "") + event.statement;
+          } else if (event.type === "reset" && preview) {
+            preview.remove();
+            preview = null;
+            showProgressLine("Rewriting the answer…");
+          }
+        }
+        if (chunk.done) return null;
+      }
+    }
+
     async function ask(question) {
       setLoading(true);
       try {
-        const response = await fetch("/api/ask", {
+        const response = await fetch("/api/ask/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question: question }),
         });
+        const type = (response.headers && response.headers.get("content-type")) || "";
         let body = null;
-        try {
-          body = await response.json();
-        } catch (_) {
-          body = null;
-        }
-        setLoading(false);
-        if (body && typeof body === "object" && typeof body.outcome === "string") {
-          renderAnswer(body, question);
-          // Not if they have already started typing the next question.
-          if (shouldClearQuestion(body.outcome) && textarea.value.trim() === question) {
-            textarea.value = "";
-            updateCounter();
-          }
+        if (type.startsWith("text/event-stream") && response.body) {
+          body = await readStream(response, question);
         } else {
-          renderFailure(question);
+          // A refusal (rate limit, budget, bad input) comes back as plain JSON.
+          try {
+            body = await response.json();
+          } catch (_) {
+            body = null;
+          }
         }
+        showAnswer(body, question);
       } catch (_) {
         setLoading(false);
         renderFailure(question);

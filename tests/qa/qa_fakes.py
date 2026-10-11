@@ -4,6 +4,7 @@ Both fakes bill realistic token counts (the same conservative bound the
 pipeline uses for sizing) so cost and ``max_cost_usd`` tests are meaningful.
 """
 
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -115,6 +116,8 @@ class FakeProvider:
     trimmed: list[bool] = field(default_factory=list)
     # Per call: why an invalid (None) draft was invalid (ProviderResult.issues).
     issues: list[tuple[DraftIssue, ...]] = field(default_factory=list)
+    stream_extra: list[DraftClaim] = field(default_factory=list)
+    streamed: int = 0
 
     async def generate(self, prompt: AnswerPrompt) -> ProviderResult:
         self.prompts.append(prompt)
@@ -133,6 +136,21 @@ class FakeProvider:
             claims_trimmed=trimmed,
             issues=issues,
         )
+
+    async def generate_streaming(
+        self, prompt: AnswerPrompt, on_claim: Callable[[DraftClaim], None]
+    ) -> ProviderResult:
+        """Announce each claim of the next draft, then return it like ``generate``.
+
+        ``stream_extra`` claims are announced but missing from the returned
+        draft, like an early parse the complete output did not confirm.
+        """
+        upcoming = self.drafts[min(len(self.prompts) + 1, len(self.drafts)) - 1]
+        for streamed in [*(upcoming.claims if upcoming else ()), *self.stream_extra]:
+            on_claim(streamed)
+            await asyncio.sleep(0)
+        self.streamed += 1
+        return await self.generate(prompt)
 
     def bill(self, prompt: AnswerPrompt, draft: AnswerDraft | None) -> tuple[int, int]:
         return (

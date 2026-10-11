@@ -8,6 +8,8 @@ Privacy: logs carry the request ID, outcome, latency, cost and exception
 *type* only. Question and answer text are never logged.
 """
 
+import asyncio
+import json
 import logging
 import math
 import os
@@ -20,7 +22,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
@@ -37,6 +39,7 @@ from hoa_qa.budget import (
     select_counter_store,
 )
 from hoa_qa.models import Answer, Outcome, validate_https
+from hoa_qa.trace import NO_TRACE
 from hoa_qa.web import monitor
 from hoa_qa.web.deps import (
     Asker,
@@ -62,6 +65,14 @@ logger = logging.getLogger("hoa_qa.web")
 
 MAX_QUESTION_CHARS = 500
 TRACED_PATHS = frozenset({"/api/ask", "/api/monitor/ask"})
+
+
+def sse(event: dict[str, Any]) -> bytes:
+    """One server-sent event. JSON never contains a raw newline, so a
+    question or answer cannot break the framing."""
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+
 PUBLIC_DIR = REPO_ROOT / "public"
 
 Question = Annotated[
@@ -196,24 +207,29 @@ def create_app(
     async def unavailable(request: Request, exc: ServiceUnavailable) -> Any:
         return answer_response(web_answer(Outcome.error, str(exc)), status_code=503)
 
-    @app.post("/api/ask")
-    async def ask(
-        body: AskRequest,
+    async def admit(
         request: Request,
-        settings: Annotated[WebSettings, Depends(get_settings)],
-        budget_store: Annotated[BudgetStore, Depends(get_budget_store)],
-        limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
-        asker: Annotated[Asker, Depends(get_asker)],
-    ) -> JSONResponse:
+        settings: WebSettings,
+        budget_store: BudgetStore,
+        limiter: RateLimiter,
+        asker: Asker,
+    ) -> tuple[JSONResponse, Reservation | None, str]:
+        """Origin, rate limit and budget, in that order, for one question.
+
+        Returns ``(refusal, None, id)`` when the question may not run, and
+        ``(unused, reservation, id)`` when it may.
+        """
+        request_id = uuid.uuid4().hex
         if not origin_allowed(request, on_vercel=settings.on_vercel):
-            return answer_response(
+            refusal = answer_response(
                 web_answer(Outcome.error, "Cross-origin requests aren't allowed."),
                 status_code=403,
             )
+            return refusal, None, request_id
         ip = client_ip(request, on_vercel=settings.on_vercel)
         if not await limiter.hit(ip):
             logger.info("ask outcome=rate_limited")
-            return answer_response(
+            refusal = answer_response(
                 web_answer(
                     Outcome.error,
                     "You're asking questions faster than this service allows. "
@@ -221,10 +237,10 @@ def create_app(
                 ),
                 status_code=429,
             )
+            return refusal, None, request_id
 
         # Hold the worst-case cost before spending anything. Any failure to
         # reserve (over budget, or the store erroring) refuses the question.
-        request_id = uuid.uuid4().hex
         reserve_usd = reservation_amount(settings, asker)
         if not request.app.state.budget_checked:
             request.app.state.budget_checked = True
@@ -240,12 +256,115 @@ def create_app(
                 type(exc).__name__,
             )
             reservation = None
+        answer = budget_exhausted_answer(settings.documents_url)
         if reservation is None:
-            answer = budget_exhausted_answer(settings.documents_url)
             logger.info(
                 "ask outcome=%s request_id=%s", answer.outcome, answer.request_id
             )
-            return answer_response(answer)
+        return answer_response(answer), reservation, request_id
+
+    @app.post("/api/ask/stream")
+    async def ask_stream(
+        body: AskRequest,
+        request: Request,
+        settings: Annotated[WebSettings, Depends(get_settings)],
+        budget_store: Annotated[BudgetStore, Depends(get_budget_store)],
+        limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+        asker: Annotated[Asker, Depends(get_asker)],
+    ) -> Any:
+        """``/api/ask`` as server-sent events, so the page can show progress.
+
+        Same admission checks, budget and logging. Events: ``stage`` as each
+        stage starts, ``claim`` for each sentence of the answer once it has
+        passed every check, ``reset`` if a draft is withdrawn, and finally
+        ``answer`` with the same body ``/api/ask`` returns. The ``answer``
+        event is the answer; everything before it is a preview. A question
+        that may not run gets the ordinary JSON refusal, not a stream.
+        """
+        refusal, reservation, request_id = await admit(
+            request, settings, budget_store, limiter, asker
+        )
+        if reservation is None:
+            return refusal
+        traced = getattr(asker, "ask_traced", None)
+
+        async def events() -> AsyncIterator[bytes]:
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+            async def run() -> Any:
+                try:
+                    if traced is None:
+                        return await asker(body.question)
+                    return await traced(body.question, NO_TRACE, emit=queue.put_nowait)
+                finally:
+                    queue.put_nowait(None)
+
+            started = time.perf_counter()
+            task = asyncio.ensure_future(run())
+            result: Any = None
+            reported: object = None
+            try:
+                while (event := await queue.get()) is not None:
+                    yield sse(event)
+                result = await task
+                reported = result.estimated_cost_usd
+                answer = result.answer
+            except Exception as exc:
+                # Exception messages can quote the question; log the type only.
+                logger.error(
+                    "asker failed request_id=%s error_type=%s",
+                    request_id,
+                    type(exc).__name__,
+                )
+                reported = getattr(exc, "estimated_cost_usd", None)
+                answer = web_answer(
+                    Outcome.error,
+                    "Something went wrong while answering. Please try again later.",
+                ).model_copy(update={"request_id": request_id})
+            finally:
+                # Also reached when the browser goes away mid-answer: stop the
+                # work and settle the budget (the full reservation stays
+                # counted if no cost was reported).
+                task.cancel()
+                cost = await _reconcile(budget_store, reservation, reported, request_id)
+            yield sse({"type": "answer", "answer": answer.model_dump(mode="json")})
+            # The answer is out; what follows costs the reader no time.
+            latency_ms = round((time.perf_counter() - started) * 1000)
+            logger.info(
+                "ask outcome=%s request_id=%s latency_ms=%d cost_usd=%.6f streamed",
+                answer.outcome,
+                answer.request_id,
+                latency_ms,
+                cost,
+            )
+            if result is not None and request.app.state.monitor_token is not None:
+                await monitor.record(
+                    request.app.state.recent_store,
+                    monitor.feed_row(result, latency_ms, cost, operator=False),
+                )
+            await telemetry.flush_async()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            # Proxies must pass each event on as it is written.
+            headers={"X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/ask")
+    async def ask(
+        body: AskRequest,
+        request: Request,
+        settings: Annotated[WebSettings, Depends(get_settings)],
+        budget_store: Annotated[BudgetStore, Depends(get_budget_store)],
+        limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+        asker: Annotated[Asker, Depends(get_asker)],
+    ) -> JSONResponse:
+        refusal, reservation, request_id = await admit(
+            request, settings, budget_store, limiter, asker
+        )
+        if reservation is None:
+            return refusal
 
         started = time.perf_counter()
         try:
