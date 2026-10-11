@@ -264,6 +264,10 @@ class AskResult(BaseModel):
     stage_ms: dict[str, float] = Field(default_factory=dict)
     # The curated cache entry whose stored answer was served, if any.
     cache_entry: str | None = None
+    # Answer-model calls made (2 when the answer was regenerated).
+    answer_calls: int = 0
+    # Fixed labels describing how the question was handled (see ``_tags``).
+    tags: tuple[str, ...] = ()
 
 
 class Asker(Protocol):
@@ -528,7 +532,16 @@ class QAAsker:
                 answer_output_tokens=asked.answer_output_tokens,
                 reviewed=reviewed is not None,
             )
-            root.trace(name="ask", tags=[answer.outcome.value])
+            root.trace(
+                name="ask",
+                tags=asked.tags,
+                cache_entry=asked.cache_entry,
+                reason=answer.reason.value if answer.reason else None,
+                answer_model=self._provider.model,
+                jev_model=self._settings.jev_model,
+                corpus_built=self._corpus.manifest.build_time.date().isoformat(),
+                cost_usd=round(asked.estimated_cost_usd, 6),
+            )
             if answer.outcome is Outcome.error:
                 root.error("pipeline_error")
             return asked
@@ -581,6 +594,8 @@ class QAAsker:
             latency_ms=latency_ms,
             stage_ms=dict(usage.stage_ms),
             cache_entry=usage.cache_entry,
+            answer_calls=usage.answer_calls,
+            tags=_tags(answer, usage, cache_loaded=bool(self._cache_entries)),
         )
         _log_result(asked, usage)
         return asked
@@ -1036,6 +1051,23 @@ def _trace_verify(span: telemetry.Observation, verified: Sequence[_Verified]) ->
             for v in verified
         ]
     )
+
+
+def _tags(answer: Answer, usage: _Usage, *, cache_loaded: bool) -> tuple[str, ...]:
+    """Fixed labels for filtering traces: the outcome, how the cache did,
+    and whether the answer needed a retry or lost a claim."""
+    tags = [answer.outcome.value]
+    if "cache_exact" in usage.notes:
+        tags.append("cache-exact")
+    elif usage.cache_entry is not None:
+        tags.append("cache-hit")
+    elif cache_loaded and answer.outcome is not Outcome.invalid_input:
+        tags.append("cache-miss")
+    if usage.answer_calls > 1:
+        tags.append("retried")
+    if OMITTED_NOTE in answer.answer_text:
+        tags.append("claims-dropped")
+    return tuple(tags)
 
 
 def _cached(entry: CacheEntry) -> _Result:

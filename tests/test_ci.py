@@ -114,6 +114,15 @@ def test_deploy_answer_cache_is_optional_and_from_main_only() -> None:
     assert names.index("Download answer cache") < names.index("Build")
 
 
+def test_deploy_records_the_commit_it_checked_out() -> None:
+    steps = load_workflow("deploy.yml")["jobs"]["deploy"]["steps"]
+    names = [s.get("name") or s.get("uses", "") for s in steps]
+    (record,) = [s for s in steps if s.get("name") == "Record release"]
+    assert record["run"] == "git rev-parse --short=12 HEAD > release.txt"
+    checkout = next(i for i, n in enumerate(names) if n.startswith("actions/checkout@"))
+    assert checkout < names.index("Record release") < names.index("Build")
+
+
 def test_answer_cache_workflow_is_manual_and_never_deploys() -> None:
     workflow = load_workflow("answer-cache.yml")
     assert set(workflow[True]) == {"workflow_dispatch"}  # never on push or PRs

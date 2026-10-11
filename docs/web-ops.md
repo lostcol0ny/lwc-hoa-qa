@@ -266,6 +266,23 @@ their scores, each claim's verdict.
   and how long each was, not the passage text: every question sweeps the whole
   corpus, and the answer model's span already holds the passages that mattered.
 
+**Labels on every trace.**
+
+- *Tags* (a small fixed set, for filtering and grouping): the outcome
+  (`answered`, `not_found`, ...); `cache-hit`, `cache-exact` or `cache-miss`
+  when a cache is loaded; `retried` when the answer model was asked twice;
+  `claims-dropped` when the answer carries the "details left out" note; and
+  `monitor` for questions asked through the operator monitor, so your own
+  testing can be filtered out of resident traffic.
+- *Trace metadata* (filterable keys): `cache_entry`, `reason`, `answer_model`,
+  `jev_model`, `corpus_built` (the corpus build date) and `cost_usd`.
+- *Release*: the commit the Deploy workflow checked out, written to
+  `release.txt` and bundled with the function. `RELEASE` overrides it.
+- *Environment*: `production`, `preview`, `eval` or `development`.
+
+Add a tag only for something with a handful of possible values; anything with
+many (an id, a model name) belongs in metadata.
+
 **Turning it on.**
 
 1. Create a Langfuse project and copy its public and secret keys.

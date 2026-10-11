@@ -126,6 +126,11 @@ jobs:
             rm -f answer_cache.json
             echo "::warning::The answer cache from run $cache_run_id does not match this corpus: deploying without a cache. Re-run 'Answer cache'."
           fi
+      # The commit actually checked out above (current main in production),
+      # bundled with the function so traces carry the release they came from.
+      - name: Record release
+        if: steps.corpus.outputs.run_id != ''
+        run: git rev-parse --short=12 HEAD > release.txt
       - name: Install Vercel CLI
         if: steps.corpus.outputs.run_id != ''
         run: npm install --global "vercel@${VERCEL_CLI_VERSION}"

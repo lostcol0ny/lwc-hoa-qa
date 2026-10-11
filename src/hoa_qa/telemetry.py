@@ -22,9 +22,12 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Iterator, Mapping
+import re
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from opentelemetry.sdk.resources import Resource
@@ -37,6 +40,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_LANGFUSE_URL = "https://cloud.langfuse.com"
 OTLP_TRACES_PATH = "/api/public/otel/v1/traces"
 FLUSH_TIMEOUT_MS = 2_000
+# The Deploy workflow writes the deployed commit here (the function bundle
+# includes it, like corpus.json), so traces can be compared across deploys.
+RELEASE_FILE = Path("release.txt")
+_RELEASE = re.compile(r"[0-9A-Za-z._-]{1,64}")
+
+# Tags the caller adds to every trace started inside ``tagged(...)``.
+_extra_tags: ContextVar[tuple[str, ...]] = ContextVar("extra_tags", default=())
 
 # Langfuse observation types (langfuse.observation.type).
 Kind = Literal["span", "generation", "chain", "retriever", "guardrail", "evaluator"]
@@ -122,12 +132,41 @@ def configure(env: Mapping[str, str]) -> bool:
             or env.get("VERCEL_ENV", "").strip()
             or "development"
         ),
-        release=env.get("VERCEL_GIT_COMMIT_SHA", "").strip() or None,
+        release=release(env),
     )
     logger.info(
         "tracing on environment=%s content=%s", _state.environment, _state.content
     )
     return True
+
+
+def release(env: Mapping[str, str], path: Path = RELEASE_FILE) -> str | None:
+    """Which build this is: ``RELEASE``, else release.txt, else Vercel's commit.
+
+    Anything that is not a short plain identifier is ignored, so a stray file
+    can't put arbitrary text on every trace.
+    """
+    candidates = [env.get("RELEASE", "")]
+    try:
+        candidates.append(path.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    candidates.append(env.get("VERCEL_GIT_COMMIT_SHA", ""))
+    for candidate in candidates:
+        value = candidate.strip()
+        if _RELEASE.fullmatch(value):
+            return value
+    return None
+
+
+@contextmanager
+def tagged(*tags: str) -> Iterator[None]:
+    """Add ``tags`` to every trace started inside the block (and its tasks)."""
+    token = _extra_tags.set((*_extra_tags.get(), *tags))
+    try:
+        yield
+    finally:
+        _extra_tags.reset(token)
 
 
 def flush(timeout_ms: int = FLUSH_TIMEOUT_MS) -> None:
@@ -207,12 +246,22 @@ class Observation:
             ),
         )
 
-    def trace(self, *, name: str, tags: list[str]) -> None:
-        """Trace-level fields, set on the root span."""
+    def trace(self, *, name: str, tags: Sequence[str], **metadata: Any) -> None:
+        """Trace-level fields, set on the root span.
+
+        ``tags`` are a small fixed vocabulary to filter and group by;
+        ``metadata`` is for values with many possibilities (an entry id, a
+        model name). Both are numbers and codes, never text.
+        """
         if self._span is None:
             return
         self._span.set_attribute("langfuse.trace.name", name)
-        self._span.set_attribute("langfuse.trace.tags", tags)
+        self._span.set_attribute(
+            "langfuse.trace.tags", list(dict.fromkeys([*tags, *_extra_tags.get()]))
+        )
+        for key, value in metadata.items():
+            if value is not None:
+                self._span.set_attribute(f"langfuse.trace.metadata.{key}", _attr(value))
         if _state.release:
             self._span.set_attribute("langfuse.release", _state.release)
 
