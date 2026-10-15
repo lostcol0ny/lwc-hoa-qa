@@ -160,6 +160,42 @@ def test_heading_only_sections_fold_forward() -> None:
     assert result[1].heading[-2:] == ("59 Fences.", "§5.9.1")
 
 
+# Each list item repeats its parent's lead-in: alone, "10.1.1 Copies of the
+# recorded Declaration ...;" never says an Owner may see them (2026-10-15).
+def test_list_items_carry_their_lead_in() -> None:
+    lead = (
+        "10.1 Records. The Association shall maintain the following records and "
+        "make them available for examination and copying by any Owners:"
+    )
+    pages = [
+        Page(
+            f"Article 10\nDocuments and Records\n{lead}\n"
+            "10.1.1 Organizational Documents. Copies of the Declaration;\n"
+            "10.1.2 Receipts. Records of receipts and expenditures, including:\n"
+            "10.1.2.1 Contracts. Copies of all contracts;",
+            40,
+            "35",
+        ),
+        Page(
+            "10.1.3 Minutes. The minutes of all meetings for seven years;\n"
+            "10.2 Retention. Records are kept at the office of the Association.",
+            41,
+            "36",
+        ),
+    ]
+    result = {s.key: s for s in sections(REGISTRY["declaration"], pages)}
+    article_lead = f"Article 10 Documents and Records {lead}"
+    assert result["10.1"].lead_in == ""
+    assert result["10.1.1"].lead_in == article_lead
+    assert result["10.1.1"].chunk_text.startswith(article_lead + "\n10.1.1 ")
+    # A nested list gets its own lead-in and does not end the outer list.
+    assert result["10.1.2.1"].lead_in.startswith("10.1.2 Receipts.")
+    assert result["10.1.3"].lead_in == article_lead
+    # The lead-in is context, not source lines: the item's page is unchanged.
+    assert citation(REGISTRY["declaration"], result["10.1.3"]).endswith(", p. 36")
+    assert result["10.2"].lead_in == ""
+
+
 # N2: ALL-CAPS lines split only after a finished sentence; form blanks stay whole.
 def test_clubhouse_caps_and_form_blanks() -> None:
     text = (

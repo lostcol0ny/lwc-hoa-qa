@@ -9,7 +9,7 @@ in ``warnings`` and stay in the enclosing section's text.
 
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from hoa_qa.ingest.cleanup import normalize
 from hoa_qa.ingest.extract import Page
@@ -42,6 +42,9 @@ FORM_BLANK = re.compile(r"_{4,}")
 STRUCTURAL = {"declaration", "bylaws", "articles", "rules-2023", "rules-2016"}
 MAX_CHARS = 3200  # ~800 estimated tokens at 4 characters per token.
 LABEL_CHARS = 80
+# A lead-in longer than this is cut to its last sentence before it is repeated
+# in each list item (10.1's, with its folded Article title, is ~300).
+LEAD_IN_CHARS = 400
 
 Key = tuple[int, ...]
 
@@ -53,10 +56,20 @@ class Section:
     lines: tuple[tuple[str, Page], ...]
     # Citation parts after the document title; heading_path may be more verbose.
     label: tuple[str, ...] = ()
+    # The parent's list lead-in ("10.1 Records. The Association shall maintain
+    # the following records and make them available ... to any Owners:"),
+    # repeated at the top of each list item's chunk. Not in ``lines``: it is
+    # context, so it never moves the item's page numbers.
+    lead_in: str = ""
 
     @property
     def text(self) -> str:
         return "\n".join(line for line, _ in self.lines)
+
+    @property
+    def chunk_text(self) -> str:
+        """The text a chunk carries: the lead-in, if any, then the section."""
+        return f"{self.lead_in}\n{self.text}" if self.lead_in else self.text
 
 
 def shorten(text: str, limit: int = LABEL_CHARS) -> str:
@@ -201,7 +214,7 @@ def _structural(
                     key, heading, label = new
                 lines.append((piece, page))
     flush()
-    return _fold(_titled(result, major_word))
+    return _lead_ins(_fold(_titled(result, major_word)))
 
 
 def _heading(
@@ -329,6 +342,46 @@ def _fold(sections: list[Section]) -> list[Section]:
     return output
 
 
+def _lead_ins(sections: list[Section]) -> list[Section]:
+    """Give each list item its parent's lead-in.
+
+    "10.1 Records. The Association shall maintain the following records and
+    make them available ... to any Owners:" is followed by 10.1.1-10.1.5, each
+    its own chunk naming one kind of record. Alone, "10.1.1 Copies of the
+    recorded Declaration ...;" never says an Owner may see them, so a correct
+    claim citing it failed the support check (2026-10-15: "What documents can
+    I request from the HOA?" came back unverified after two drafts).
+    """
+    output: list[Section] = []
+    # Open lead-ins, outermost first: a nested list (10.1.1 ...: 10.1.1.1)
+    # must not end its parent's list (10.1.2 still follows 10.1).
+    open_leads: list[Section] = []
+    for section in sections:
+        while open_leads and not _is_child(open_leads[-1], section):
+            open_leads.pop()
+        if open_leads and _depth(section) == _depth(open_leads[-1]) + 1:
+            section = replace(section, lead_in=_lead_in_text(open_leads[-1]))
+        if normalize(section.text).endswith(":"):
+            open_leads.append(section)
+        output.append(section)
+    return output
+
+
+def _depth(section: Section) -> int:
+    """0 for an Article or rules Section, 1 for 10.1 or 3.A, 2 for 10.1.1."""
+    if section.key.startswith(("article-", "section-")):
+        return 0
+    return section.key.count(".")
+
+
+def _lead_in_text(section: Section) -> str:
+    """The lead-in as one line; a long section keeps only its last sentence."""
+    text = normalize(section.text)
+    if len(text) <= LEAD_IN_CHARS:
+        return text
+    return re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)[-1]
+
+
 def _meeting(source: Source, pages: list[Page]) -> list[Section]:
     meeting = f"Meeting {source.effective_date}"
     return [
@@ -414,9 +467,7 @@ def sections(
     for section in result:
         counts[section.key] += 1
         suffix = "" if counts[section.key] == 1 else f"-occ{counts[section.key]}"
-        output.append(
-            Section(section.key + suffix, section.heading, section.lines, section.label)
-        )
+        output.append(replace(section, key=section.key + suffix))
     return output
 
 
@@ -514,8 +565,10 @@ def parts(
         ]
     else:
         groups = _split_text(section.lines)
+    # Every part of a long list item keeps the lead-in, as statute parts keep
+    # their context line.
     return [
-        Section(f"{section.key}-{_suffix(i)}", section.heading, tuple(g), section.label)
+        replace(section, key=f"{section.key}-{_suffix(i)}", lines=tuple(g))
         for i, g in enumerate(groups)
     ]
 

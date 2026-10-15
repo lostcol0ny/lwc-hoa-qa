@@ -1,7 +1,7 @@
 """Shared corpus and response contracts. Larger authority ranks take precedence."""
 
 import re
-from datetime import date
+from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Self
@@ -127,6 +127,27 @@ class Chunk(Model):
         ):
             raise ValueError("page_end must be >= page_start")
         return self
+
+
+# Illinois. A fixed UTC-6 (no tz database needed on the runtime): a law takes
+# effect at the start of its day, so this is never a day early or late for a
+# January 1 date and at most an hour late during daylight time.
+HOA_TIMEZONE = timezone(timedelta(hours=-6), "America/Chicago (standard)")
+
+
+def hoa_today() -> date:
+    """Today's date where the HOA is."""
+    return datetime.now(UTC).astimezone(HOA_TIMEZONE).date()
+
+
+def not_yet_effective(chunk: Chunk, today: date) -> bool:
+    """True for a passage that has passed but is not law yet (ingest.acts).
+
+    Statute versions in force are always dated on or before their build, so
+    this is a Public Act ingested ahead of its effective date, until that
+    date arrives; the corpus need not be rebuilt for it to become current.
+    """
+    return chunk.effective_date is not None and chunk.effective_date > today
 
 
 def citation_url(chunk: Chunk) -> str:

@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from hoa_qa.answer.statute_notes import applicability_note, cites_cicaa
+from hoa_qa.ingest.acts import act_chunks, compiled, load_act
 from hoa_qa.ingest.cleanup import OCRCleanup, clean
 from hoa_qa.ingest.extract import extract
 from hoa_qa.ingest.fetch import Fetcher
@@ -61,8 +62,28 @@ def build(
     fallbacks: list[str] = []
     errors: list[str] = []
     snapshots: list[Snapshot] = []
+    by_id = {source.doc_id: source for source in sources}
     for source in sources:
         if source.exclude:
+            continue
+        if source.kind == "public_act":
+            assert source.amends is not None
+            amended = by_id[source.amends]
+            if compiled(source, load_snapshot(statutes, amended)[0]):
+                warnings.append(
+                    f"{source.doc_id}: statutes/{amended.doc_id} is compiled through "
+                    f"P.A. {source.public_act}; not ingested (remove it from "
+                    "sources.yaml)"
+                )
+                continue
+            page = load_act(statutes, source)
+            hashes[source.doc_id] = hashlib.sha256(page).hexdigest()
+            for chunk in act_chunks(source, amended, page, warnings):
+                try:
+                    check_pii(chunk.text_clean, source.doc_id)
+                except ValueError as exc:
+                    errors.append(f"{chunk.id}: {exc}")
+                chunks.append(chunk)
             continue
         if source.kind == "statute":
             snapshot, documents = load_snapshot(statutes, source)
@@ -93,7 +114,7 @@ def build(
                 section, keep_together=source.doc_id == "arch-form", header=header
             ):
                 chunk_id = f"{source.doc_id}-{part.key}"
-                raw = part.text
+                raw = part.chunk_text
                 text = clean(
                     raw,
                     chunk_id,

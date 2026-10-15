@@ -2,6 +2,10 @@
 
 python -m hoa_qa.ingest refresh-statutes rewrites the statutes/ snapshot from
 ILGA's file repository (about half an hour at its 10-second crawl delay).
+
+python -m hoa_qa.ingest snapshot-acts fetches each public_act source's page
+(one request each) into statutes/<doc_id>/ for review; an enacted Act never
+changes, so this runs once, when the source is added.
 """
 
 import argparse
@@ -12,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hoa_qa.ingest import OCR_SOURCES, STATUTES_DIR, build
+from hoa_qa.ingest.acts import snapshot_act
 from hoa_qa.ingest.fetch import Fetcher
 from hoa_qa.ingest.sources import load_sources
 from hoa_qa.ingest.statutes import refresh
@@ -19,7 +24,9 @@ from hoa_qa.ingest.statutes import refresh
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["build", "refresh-statutes"])
+    parser.add_argument(
+        "command", choices=["build", "refresh-statutes", "snapshot-acts"]
+    )
     parser.add_argument("--out", type=Path, default=Path("build"))
     parser.add_argument("--sources", type=Path, default=Path("sources.yaml"))
     parser.add_argument("--no-llm", action="store_true")
@@ -39,6 +46,19 @@ def main() -> None:
                 f"updated {snapshot.ilga_updated_on} through P.A. "
                 f"{snapshot.through_public_act}"
             )
+        return
+    if args.command == "snapshot-acts":
+        with tempfile.TemporaryDirectory() as cache:
+            fetch = Fetcher(Path(cache)).fresh
+            for source in load_sources(args.sources):
+                if source.kind == "public_act" and not source.exclude:
+                    act = snapshot_act(
+                        args.sources.parent / STATUTES_DIR,
+                        source,
+                        fetch,
+                        datetime.now(UTC).date(),
+                    )
+                    print(f"{act.doc_id}: {act.url} sha256 {act.sha256}")
         return
     if not 0 <= args.max_ocr_fallback_fraction <= 1:
         parser.error("--max-ocr-fallback-fraction must be between 0 and 1")

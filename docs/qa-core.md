@@ -146,6 +146,31 @@ The model never decides whether these appear (`answer/statute_notes.py`):
   forbids applicability conclusions. Statute claims otherwise go through the
   same quote and support checks as every other claim.
 
+### Laws not yet in effect
+
+A `public_act` source (`ingest/acts.py`) puts a Public Act's new text in the
+corpus before ILGA compiles it into the statutes, dated by the Act's
+effective date (P.A. 104-0734: 765 ILCS 160/1-35(d)(8) and 1-45(j), effective
+2027-01-01). A passage is **not yet in effect** while its `effective_date` is
+after today (`models.not_yet_effective`, at a fixed UTC-6, Illinois standard
+time). Until then:
+
+- The prompt marks it (`note="not yet in effect; takes effect 2027-01-01"`)
+  and tells the model to state it as a scheduled change with its start date,
+  never as current, and, when a passage in force covers the question, to give
+  the law in force first. Its first line names the new text ("New or changed
+  text: (d)(8)"), since a changed subsection is reprinted whole.
+- Code enforces it: an answer or conflict claim citing such a passage fails as
+  `not_yet_in_effect` before the support check unless its statement names the
+  effective year and does not present it as current ("currently", "now",
+  "in effect", ...; `ask._effective_date_screen`). The support check sees the
+  passage's `effective_date` but not today's date, so without this rule "1-45(j)
+  requires a written collection policy" would pass a year early.
+
+On the effective date the passage becomes ordinary current law, with no corpus
+rebuild. Once `statutes/cicaa` is compiled through the Act, the build skips the
+source and warns that it can be removed.
+
 ## Streaming
 
 `QAAsker.ask_traced(question, trace, emit=callback)` reports progress while it
@@ -400,13 +425,16 @@ maximum-length question, at output caps of 1024, 2048 and 4096.
 | `tests/fixtures/mini_corpus.json` (8 chunks) | $0.10023 | **$0.07975** | $0.06951 |
 | Synthetic ~74K-token corpus (240 chunks) | $0.13479 | **$0.11431** | $0.10407 |
 | Real corpus, HOA documents only (360 chunks) | $0.21132 | **$0.19084** | $0.18060 |
-| Real corpus with Illinois statutes (668 chunks) | $0.26780 | **$0.24732** | $0.23708 |
+| Real corpus with Illinois statutes (678 chunks) | $0.27244 | **$0.25196** | $0.24172 |
 
 The answer-input term depends on the prompt and schema text, which are the
 same for every corpus. The retry feedback and length rules added with the
 not-found recovery change (and an earlier prompt change) raised every row by
-the same $0.00229. The mini and synthetic rows are measured. The real-corpus
-rows are the 2026-09-27 figures plus that constant.
+the same $0.00229. The mini and synthetic rows are measured. The
+statutes row was measured on 2026-10-15 (`--no-llm` build, 678 chunks
+including the 4 of P.A. 104-0734): $0.24953 on the 668-chunk corpus before
+the list lead-ins and the Act, which raised it by $0.00243. The HOA-only row
+is the 2026-09-27 figure plus that constant.
 
 At 2048, the bound breaks down like this:
 
@@ -418,9 +446,10 @@ At 2048, the bound breaks down like this:
 
 On the small corpora the largest term is the worst-case answer prompt, where
 the question and eight rejected statements are counted at 4 bytes per
-character. On the real corpus the sweep term (every one of the 668 planned
-passages as its own request) is the largest. Neither is the output. Real-corpus
-figures were computed on 2026-09-27 from a `--no-llm` build.
+character. On the real corpus the sweep term (every one of the 678 planned
+passages as its own request) is the largest. Neither is the output. The
+breakdown's real-corpus figures were computed on 2026-09-27 from a `--no-llm`
+build, before the changes above.
 
 ## Logging and privacy
 

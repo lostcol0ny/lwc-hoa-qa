@@ -549,21 +549,77 @@ def _pack(lines: list[str], limit: int) -> list[list[str]]:
             units.append(sentence)
     groups: list[list[str]] = []
     size = 0
+    # Lead-ins whose lists are still running, outermost first, with each
+    # one's own label style: "(1) The board shall maintain the following
+    # records ...:" stays open through "(i)".."(vii)" and closes at "(2)".
+    open_leads: list[tuple[str | None, str]] = []
+    last_letter = ""
+    previous = ""
     for unit in units:
+        style = _label_style(unit, last_letter, after_lead_in=previous.endswith(":"))
+        if style in ("lower", "upper"):
+            last_letter = unit[1]  # "(h) ..." -> "h"
+        previous = unit
+        if style is None:
+            open_leads.clear()
+        else:
+            siblings = [i for i, (s, _) in enumerate(open_leads) if s == style]
+            if siblings:
+                del open_leads[siblings[0] :]
         if groups and size + 1 + len(unit) <= limit:
             groups[-1].append(unit)
             size += 1 + len(unit)
-            continue
-        # Keep a list's lead-in ("... shall maintain the following records:")
-        # with its first item, so one part states the whole requirement.
-        carried: list[str] = []
-        if groups and len(groups[-1]) > 1 and groups[-1][-1].endswith(":"):
-            lead = groups[-1][-1]
-            if len(lead) + 1 + len(unit) <= limit:
-                carried = [groups[-1].pop()]
-        groups.append([*carried, unit])
-        size = sum(len(u) + 1 for u in groups[-1]) - 1
+        else:
+            # Start the part with the lead-ins of the list it continues, so
+            # it states the whole requirement: "(vii) Any reserve study."
+            # alone does not say the board must make it available.
+            leads = [lead for _, lead in open_leads]
+            if groups and groups[-1][-1].endswith(":") and groups[-1][-1] not in leads:
+                leads.append(groups[-1][-1])  # An unlabeled "... following:".
+            if sum(len(lead) + 1 for lead in leads) + len(unit) > limit:
+                leads = leads[-1:]  # The innermost alone, if that fits.
+                if not leads or len(leads[0]) + 1 + len(unit) > limit:
+                    leads = []
+            if leads and groups and len(groups[-1]) > 1 and groups[-1][-1] == leads[-1]:
+                groups[-1].pop()  # It moves here, with its first item.
+            groups.append([*leads, unit])
+            size = sum(len(u) + 1 for u in groups[-1]) - 1
+        if unit.endswith(":"):
+            open_leads.append((style, unit))
     return groups
+
+
+_LABEL = re.compile(r"^\((\d{1,3}|[a-z]{1,5}|[A-Z]{1,5})\)\s")
+
+
+def _label_style(
+    unit: str, last_letter: str = "", *, after_lead_in: bool = False
+) -> str | None:
+    """A list item's label style ("(2)", "(b)", "(iv)", "(A)"); None if unlabeled.
+
+    "(i)" is ambiguous. 765 ILCS 160/1-30 has both: "(h) ... unless: (i) the
+    managing agent fees ...; (ii) ...; (iii) .... (i) Board records. (1) ...".
+    Right after a lead-in it starts that list (roman); after the letter (h) it
+    is the next letter; otherwise roman, as ILCS nests (a) > (1) > (A) > (i).
+    """
+    match = _LABEL.match(unit)
+    if match is None:
+        return None
+    label = match[1]
+    if label.isdigit():
+        return "digit"
+    if (
+        len(label) == 1
+        and not after_lead_in
+        and last_letter
+        and ord(label) == ord(last_letter) + 1
+    ):
+        return "lower" if label.islower() else "upper"
+    if re.fullmatch(r"[ivxl]+", label):
+        return "roman"
+    if re.fullmatch(r"[IVXL]+", label):
+        return "ROMAN"
+    return "lower" if label.islower() else "upper"
 
 
 def statute_chunks(
