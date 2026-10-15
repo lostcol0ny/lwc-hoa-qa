@@ -505,6 +505,46 @@ def test_a_list_lead_in_stays_with_its_first_item() -> None:
     ]
 
 
+def test_a_continued_list_repeats_its_open_lead_ins() -> None:
+    """cicaa-1-30-d began at "(iv)", without "(1) The board shall maintain the
+    following records and make them available ...:", so a claim citing it
+    failed the support check (2026-10-15)."""
+    lead = "(1) Board keeps these:"
+    items = ["(i) " + "a" * 20, "(ii) " + "b" * 20, "(iii) " + "c" * 20]
+    after = "(2) A written request is due in 30 days."
+    groups = _pack([lead, *items, after], 60)
+    assert groups == [
+        [lead, items[0]],
+        [lead, items[1]],
+        [lead, items[2]],
+        [after],  # "(2)" is a sibling of "(1)": that list is over.
+    ]
+    # A nested lead-in rides along with its parent's, outermost first...
+    inner = "(A) Including:"
+    deep = "(i) " + "d" * 30
+    assert _pack([lead, items[0], inner, deep], 80) == [
+        [lead, items[0]],
+        [lead, inner, deep],
+    ]
+    # ...or alone, when both don't fit.
+    assert _pack([lead, items[0], inner, deep], 60)[-1] == [inner, deep]
+    # 1-30's "(i) Board records." is the letter after (h): it ends (h)'s list,
+    # whose own first item is the roman "(i)".
+    h = "(h) No fees unless:"
+    roman = ["(i) fees are " + "f" * 20 + ";", "(iii) stated."]
+    letter_i = "(i) Board records."
+    assert _pack([h, *roman, letter_i, lead, *items[:2]], 60) == [
+        [h, roman[0]],
+        [h, roman[1], letter_i],
+        [lead, items[0]],
+        [lead, items[1]],  # Not (h)'s lead-in: that list ended at (i).
+    ]
+    # An unlabeled paragraph ends every open list.
+    assert _pack([lead, items[0], "Unlabeled text " + "e" * 30, items[1]], 50)[-1] == [
+        items[1]
+    ]
+
+
 def test_disclaimer_currency_follows_the_committed_manifests() -> None:
     """refresh-statutes rewrites the manifests; the disclaimer follows them."""
     snapshots = []

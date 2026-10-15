@@ -93,7 +93,7 @@ def build(
                 section, keep_together=source.doc_id == "arch-form", header=header
             ):
                 chunk_id = f"{source.doc_id}-{part.key}"
-                raw = part.text
+                raw = part.chunk_text
                 text = clean(
                     raw,
                     chunk_id,

@@ -180,8 +180,15 @@ when over 1,600 characters (~400 tokens, half the limit for other sources;
 `-a`, `-b` parts). A long section is a dense run of numbered provisions, and
 the support check judges a claim against its whole cited part: on the eval
 of 2026-09-27 a correct claim quoting §1-30's records list failed support
-against a ~2,900-character part. A list's lead-in ("... shall maintain the
-following records:") always stays in the part with its first item. Every part starts with a context
+against a ~2,900-character part. A list's lead-in ("(1) The board shall
+maintain the following records ... available for examination and copying ...:")
+stays in the part with its first item, and every later part of the same list
+starts with it again: alone, "(iv) ... ballots and proxies ..." never says the
+records are available to owners, and a claim citing such a part failed support
+on 2026-10-15. A list is open until a sibling of its lead-in ("(2)" after
+"(1)") or an unlabeled paragraph; nested lead-ins repeat outermost first.
+"(i)" right after a lead-in starts a roman list, and after "(h)" is the next
+letter (§1-30 has both). Every part starts with a context
 line naming the Act, Article, section, latest Public Act and effective date
 (continuations end it with "(continued)"), for example:
 
@@ -283,6 +290,14 @@ label uses `PDF p./pp.`. Example: Declaration §8.4 is PDF pp. 28–29, labeled
   lead-in ending in ":", or a short numbered title such as "59 Fences.") fold into
   the next section: their text is prepended and their heading joins
   `heading_path`.
+- **List lead-ins:** a section ending in ":" ("10.1 Records. The Association
+  shall maintain the following records and make them available ... to any
+  Owners:") is repeated at the top of each direct child's chunk (10.1.1-10.1.5),
+  after an Article title folded into it. Alone, "10.1.1 Copies of the recorded
+  Declaration ...;" never says an Owner may see them, so on 2026-10-15 "What
+  documents can I request from the HOA?" came back unverified. The lead-in is
+  context, not source lines: page numbers and citation labels are the item's
+  own. Over 400 characters, only its last sentence is repeated.
 - **Minutes (`board_decision`):** **one chunk per meeting** (150–310 estimated
   tokens today), id `minutes-YYYY-MM-DD-meeting`, `heading_path = [title,
   "Meeting YYYY-MM-DD"]`, and the citation label includes the meeting date. A
