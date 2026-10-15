@@ -145,6 +145,15 @@ The model never decides whether these appear (`answer/statute_notes.py`):
   says why. The prompt asks for "765 ILCS ... states that ..." phrasing and
   forbids applicability conclusions. Statute claims otherwise go through the
   same quote and support checks as every other claim.
+- Any claim (statute or not) about what the documents do **not** say ("...
+  without a requirement stated in those documents", "the Declaration does not
+  specify ...") fails as `absence_claim` before the support check
+  (`ask._silence_screen`). The prompt already forbade such commentary, but the
+  support check passed one on 2026-10-15: a conclusion drawn from silence reads
+  as supported by the passage that is silent. The pattern needs the silence to
+  be about the documents themselves, so "a shed not approved by the Board"
+  passes; on that day's 29 eval answers and the 62 curated cache claims it
+  matched only the one claim it was written for.
 
 ### Laws not yet in effect
 
