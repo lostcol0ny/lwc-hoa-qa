@@ -7,10 +7,16 @@ from typing import Literal, Self
 import yaml
 from pydantic import Field, TypeAdapter, model_validator
 
-from hoa_qa.models import Authority, CalendarDate, HttpsUrl, Model
+from hoa_qa.models import (
+    ILGA_PUBLIC_ACT_URL,
+    Authority,
+    CalendarDate,
+    HttpsUrl,
+    Model,
+)
 
 ILGA_FTP_ILCS = "https://ftp.ilga.gov/ILCS/"
-ILGA_PUBLIC_ACT = "https://www.ilga.gov/Legislation/PublicActs/View/"
+ILGA_PUBLIC_ACT = ILGA_PUBLIC_ACT_URL
 
 
 class Ilcs(Model):

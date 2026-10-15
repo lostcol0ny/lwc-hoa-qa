@@ -129,6 +129,15 @@ class Chunk(Model):
         return self
 
 
+# Where an enacted Public Act's own page lives (ingest.acts). A chunk from one
+# quotes the Act as enacted, not ILGA's compiled statutes.
+ILGA_PUBLIC_ACT_URL = "https://www.ilga.gov/Legislation/PublicActs/View/"
+
+
+def from_public_act(chunk: Chunk) -> bool:
+    return chunk.source_url.startswith(ILGA_PUBLIC_ACT_URL)
+
+
 # Illinois. A fixed UTC-6 (no tz database needed on the runtime): a law takes
 # effect at the start of its day, so this is never a day early or late for a
 # January 1 date and at most an hour late during daylight time.

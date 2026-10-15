@@ -68,6 +68,7 @@ from hoa_qa.models import (
     DocumentLink,
     Outcome,
     OutcomeReason,
+    StatuteCompilation,
     citation_url,
     hoa_today,
     not_yet_effective,
@@ -197,6 +198,26 @@ _ADVICE = re.compile(
     r"\byou(?:'re| are) (?:legally )?entitled\b|\bin your (?:case|situation)\b|"
     r"\b(?:is|are|was|were) (?:violating|breaking|in violation of)\b|"
     r"\bbreaking the law\b",
+    re.IGNORECASE,
+)
+
+# A claim about what the documents do NOT say ("... without a requirement
+# stated in those documents"). The prompt forbids it, but the support check
+# can pass one: the cited passage says what it says, and a judgment about its
+# silence reads as supported. Such a claim is a conclusion, often a legal one,
+# so code rejects it. Narrow on purpose: it needs the silence to be about the
+# documents themselves, so "a shed not approved by the Board" still passes.
+_DOCUMENTS = (
+    r"(?:documents?|passages?|instruments|Declaration|By-?laws|Rules|Articles"
+    r"(?: of Incorporation)?|minutes|governing documents|HOA documents|statutes?|Act)"
+)
+_SILENCE = re.compile(
+    rf"\b(?:not|no|never|without)\b[^.;]{{0,40}}?\b(?:stated|mentioned|specified|"
+    rf"addressed|listed|found|included|set out|provided for)\s+(?:in|by)\s+"
+    rf"(?:the|these|those|its|their|any)\s+(?:[\w-]+\s+){{0,2}}?{_DOCUMENTS}\b"
+    rf"|\b(?:the|these|those)\s+(?:[\w-]+\s+){{0,2}}?{_DOCUMENTS}\s+(?:do|does|did)"
+    rf"\s+not\s+(?:say|state|mention|address|specify|require|include|list|contain|"
+    rf"provide)\b",
     re.IGNORECASE,
 )
 
@@ -376,6 +397,11 @@ def _advice_screen(
     return "advice_phrasing" if statute and gives_advice(claim.statement) else None
 
 
+def _silence_screen(claim: DraftClaim) -> str | None:
+    """A claim may state what the passages say, never what they leave out."""
+    return "absence_claim" if _SILENCE.search(claim.statement) else None
+
+
 def _effective_date_screen(
     claim: DraftClaim, citations: tuple[CheckedCitation, ...], today: date
 ) -> str | None:
@@ -532,12 +558,12 @@ class QAAsker:
         self._applicability: ApplicabilityNote | None = (
             applicability_note(corpus.chunks) if cites_cicaa(corpus.chunks) else None
         )
-        self._statute_disclaimer: str | None = None
+        self._statute_compilation: StatuteCompilation | None = None
         if any(chunk.authority is Authority.statute for chunk in corpus.chunks):
             compiled = corpus.manifest.statute_compilation
             if compiled is None:
                 raise ValueError("corpus has statutes but no statute_compilation")
-            self._statute_disclaimer = statute_disclaimer(compiled)
+            self._statute_compilation = compiled
 
     @property
     def max_cost_usd(self) -> float:
@@ -1007,8 +1033,10 @@ class QAAsker:
         for index, (claim, (usable, _)) in enumerate(
             zip(draft.claims, screened, strict=True)
         ):
-            phrasing = _advice_screen(claim, usable) or _effective_date_screen(
-                claim, usable, today
+            phrasing = (
+                _advice_screen(claim, usable)
+                or _effective_date_screen(claim, usable, today)
+                or _silence_screen(claim)
             )
             if phrasing is not None:
                 screened[index] = ((), phrasing)
@@ -1071,10 +1099,10 @@ class QAAsker:
             parts.append(BOARD_REFERRAL)
         cited = [checked.chunk for v in kept for checked in v.citations]
         notes: list[Citation] = []
-        if self._statute_disclaimer is not None and any(
+        if self._statute_compilation is not None and any(
             chunk.authority is Authority.statute for chunk in cited
         ):
-            parts.append(self._statute_disclaimer)
+            parts.append(statute_disclaimer(self._statute_compilation, cited))
             if self._applicability is not None and cites_cicaa(cited):
                 parts.append(self._applicability.text)
                 notes += self._applicability.citations

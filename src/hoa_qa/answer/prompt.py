@@ -145,7 +145,7 @@ confidence to 0.
 """
 
 # Why a claim was rejected, as told to the model on a retry (code-authored).
-# The first six are verification failures; the rest describe an invalid
+# The first seven are verification failures; the rest describe an invalid
 # draft (see answer.provider.DraftIssue) and never quote the model's output.
 REJECTION_REASONS = {
     "no_valid_quote": "it cited a sentence number or passage that does not exist",
@@ -155,6 +155,10 @@ REJECTION_REASONS = {
     "advice_phrasing": (
         "it tells the reader their rights or legal position instead of stating "
         "what the statute says"
+    ),
+    "absence_claim": (
+        "it says what the documents do not state; state only what the passages "
+        "say, and leave out what they don't"
     ),
     "not_yet_in_effect": (
         "it cites a law that is not yet in effect without saying the year it "
