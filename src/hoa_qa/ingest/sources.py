@@ -10,6 +10,7 @@ from pydantic import Field, TypeAdapter, model_validator
 from hoa_qa.models import Authority, CalendarDate, HttpsUrl, Model
 
 ILGA_FTP_ILCS = "https://ftp.ilga.gov/ILCS/"
+ILGA_PUBLIC_ACT = "https://www.ilga.gov/Legislation/PublicActs/View/"
 
 
 class Ilcs(Model):
@@ -39,7 +40,7 @@ class Source(Model):
     doc_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     title: str = Field(min_length=1)
     url: HttpsUrl
-    kind: Literal["pdf", "blog_post", "web_page", "statute"]
+    kind: Literal["pdf", "blog_post", "web_page", "statute", "public_act"]
     authority: Authority
     # "crawl": website pages are dated by the build that fetched them.
     # "section": each statute section is dated by its own source note.
@@ -51,6 +52,10 @@ class Source(Model):
     exclude: bool = False
     exclude_reason: str | None = None
     ilcs: Ilcs | None = None
+    # public_act only: its number ("104-0734", as ILGA's URL writes it) and
+    # the doc_id of the ingested statute it amends (see ingest.acts).
+    public_act: str | None = Field(default=None, pattern=r"^\d{2,3}-\d{4}$")
+    amends: str | None = None
     notes: str = ""
 
     @model_validator(mode="after")
@@ -66,8 +71,17 @@ class Source(Model):
         if self.effective_date == "crawl" and self.kind != "web_page":
             raise ValueError("only web pages are dated by crawl")
         statute = self.kind == "statute"
-        if statute != (self.authority == Authority.statute):
-            raise ValueError("statutes, and only statutes, have statute authority")
+        law = statute or self.kind == "public_act"
+        if law != (self.authority == Authority.statute):
+            raise ValueError(
+                "statutes and public acts, and only they, have statute authority"
+            )
+        act = self.kind == "public_act"
+        if act != (self.public_act is not None) or act != (self.amends is not None):
+            raise ValueError("public acts, and only they, name public_act and amends")
+        expected = f"{ILGA_PUBLIC_ACT}{self.public_act}"
+        if act and self.url != expected:
+            raise ValueError(f"public act url must be {expected}")
         if statute != (self.effective_date == "section"):
             raise ValueError("statutes, and only statutes, are dated per section")
         if statute != (self.ilcs is not None):
@@ -103,4 +117,8 @@ def load_sources(path: Path) -> tuple[Source, ...]:
             or source.superseded_by == source.doc_id
         ):
             raise ValueError("superseded_by must name another included source")
+    statutes = {s.doc_id for s in sources if s.kind == "statute" and not s.exclude}
+    for source in sources:
+        if source.amends is not None and source.amends not in statutes:
+            raise ValueError(f"{source.doc_id}: amends must name an included statute")
     return sources

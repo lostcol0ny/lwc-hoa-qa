@@ -153,7 +153,7 @@ it was about $0.012 before the Illinois statutes were added):
 | Step | Typical cost |
 |---|---|
 | Jev gate | ~$0.00001 |
-| Jev sweep over the whole corpus (~150K estimated tokens, 668 chunks, at $0.042/MTok) | ~$0.008 |
+| Jev sweep over the whole corpus (~157K estimated tokens, 678 chunks, at $0.042/MTok) | ~$0.008 |
 | Jev support check | ~$0.0001 |
 | `claude-haiku-4-5` answer (~3–4K in, ~500 out) | ~$0.006 |
 
@@ -167,8 +167,9 @@ month's budget, then reconciles to the actual cost afterwards. `max_cost_usd` is
 a provable worst case: it charges every Jev request as if the question were 500
 four-byte characters and every token a single byte, and both answer attempts at
 their largest prompt and the full `ANSWER_MAX_TOKENS` output. For the real
-corpus (668 chunks: 360 HOA and 308 Illinois statute) at the default
-settings it is **≈ $0.245**, so R ≈ $0.245. Adding the statutes raised it
+corpus (678 chunks: 360 HOA and 318 Illinois statute, 4 of them from a
+Public Act not yet in effect) at the default settings it is **≈ $0.252**, so
+R ≈ $0.252. Adding the statutes raised it
 from ≈ $0.189: the sweep bound charges every planned passage as its own
 request.
 

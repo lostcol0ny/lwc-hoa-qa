@@ -16,6 +16,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Any, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -68,6 +69,8 @@ from hoa_qa.models import (
     Outcome,
     OutcomeReason,
     citation_url,
+    hoa_today,
+    not_yet_effective,
 )
 from hoa_qa.retrieval.gate import GATE_QUESTION, run_gate
 from hoa_qa.retrieval.jev import (
@@ -371,6 +374,29 @@ def _advice_screen(
     """A statute-backed claim must say what the statute states, not advise."""
     statute = any(c.chunk.authority is Authority.statute for c in citations)
     return "advice_phrasing" if statute and gives_advice(claim.statement) else None
+
+
+def _effective_date_screen(
+    claim: DraftClaim, citations: tuple[CheckedCitation, ...], today: date
+) -> str | None:
+    """A claim citing a law not yet in effect must name the year it takes
+    effect ("Starting January 1, 2027, ...") and must not call it current.
+
+    The support check sees each passage's effective_date but not today's
+    date, so "765 ILCS 160/1-45(j) requires a collection policy" would pass
+    it in October 2026, a year early.
+    """
+    upcoming = {
+        c.chunk.effective_date
+        for c in citations
+        if not_yet_effective(c.chunk, today) and c.chunk.effective_date
+    }
+    if not upcoming:
+        return None
+    dated = all(str(when.year) in claim.statement for when in upcoming)
+    if dated and not presents_as_current(claim.statement):
+        return None
+    return "not_yet_in_effect"
 
 
 def _authority_screen(
@@ -977,12 +1003,15 @@ class QAAsker:
             _authority_screen(claim, cites, authoritative=authoritative)
             for claim, cites in zip(draft.claims, checked, strict=True)
         ]
+        today = hoa_today()
         for index, (claim, (usable, _)) in enumerate(
             zip(draft.claims, screened, strict=True)
         ):
-            advice = _advice_screen(claim, usable)
-            if advice is not None:
-                screened[index] = ((), advice)
+            phrasing = _advice_screen(claim, usable) or _effective_date_screen(
+                claim, usable, today
+            )
+            if phrasing is not None:
+                screened[index] = ((), phrasing)
         evidence = [
             ClaimEvidence(statement=claim.statement, citations=usable)
             for claim, (usable, _) in zip(draft.claims, screened, strict=True)

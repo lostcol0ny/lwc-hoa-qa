@@ -9,8 +9,9 @@ defanged so a question or passage cannot close its own block early.
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
-from hoa_qa.models import Authority, Chunk
+from hoa_qa.models import Authority, Chunk, hoa_today, not_yet_effective
 from hoa_qa.sentences import number_sentences
 
 # Hard caps on the model's output shape (validated in answer.provider).
@@ -92,6 +93,14 @@ The app adds its own fixed note about this; do not write one.
 - Quote only the text in force: the passages are the versions in effect on \
 their effective_date. Never describe a change as current unless a passage \
 states it.
+- A passage whose note says "not yet in effect" is a law that has passed but \
+does not apply until its effective_date. Every claim citing it must say when \
+it takes effect, with the year ("Starting <month> <day>, <year>, \
+<citation> will require ..."), and must never call it current; the app \
+rejects claims that don't. It is a scheduled change, not a conflict: when a \
+passage in force also covers the question, state the law in force first, \
+then the change as its own claim. Its first line says which text is new \
+("New or changed text: ..."); describe only that text as the change.
 
 Legal and dispute questions:
 - If the question asks for legal advice, a ruling on a dispute, or whether \
@@ -136,7 +145,7 @@ confidence to 0.
 """
 
 # Why a claim was rejected, as told to the model on a retry (code-authored).
-# The first five are verification failures; the rest describe an invalid
+# The first six are verification failures; the rest describe an invalid
 # draft (see answer.provider.DraftIssue) and never quote the model's output.
 REJECTION_REASONS = {
     "no_valid_quote": "it cited a sentence number or passage that does not exist",
@@ -146,6 +155,10 @@ REJECTION_REASONS = {
     "advice_phrasing": (
         "it tells the reader their rights or legal position instead of stating "
         "what the statute says"
+    ),
+    "not_yet_in_effect": (
+        "it cites a law that is not yet in effect without saying the year it "
+        "takes effect, or calls it current"
     ),
     "too_long": (
         f"its statement was over the {MAX_STATEMENT_CHARS}-character limit; split "
@@ -210,9 +223,11 @@ def _attr(value: str) -> str:
     return defang(value).replace('"', "'")
 
 
-def render_passage(chunk: Chunk) -> str:
+def render_passage(chunk: Chunk, today: date | None = None) -> str:
     effective = chunk.effective_date.isoformat() if chunk.effective_date else "unknown"
     notes = []
+    if not_yet_effective(chunk, today or hoa_today()):
+        notes.append(f"not yet in effect; takes effect {effective}")
     if chunk.authority is Authority.superseded:
         notes.append(f"superseded by {chunk.superseded_by}; no longer in effect")
     elif chunk.authority is Authority.informal:
@@ -237,6 +252,7 @@ def build_prompt(
     failed_claims: Sequence[str] | None = None,
     authority_note: bool = False,
     invalid_output: bool = False,
+    today: date | None = None,
 ) -> AnswerPrompt:
     """Build the prompt; ``failed_claims`` (possibly empty) marks a retry.
 
@@ -245,7 +261,8 @@ def build_prompt(
     rule; ``invalid_output`` says the previous output could not be used at
     all (an empty ``failed_claims`` implies it).
     """
-    body = "\n".join(render_passage(chunk) for chunk in passages)
+    today = today or hoa_today()
+    body = "\n".join(render_passage(chunk, today) for chunk in passages)
     user = (
         "<passages>\n"
         f"{body}\n"

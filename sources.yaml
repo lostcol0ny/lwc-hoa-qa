@@ -231,3 +231,17 @@
     chapter: 805
     act: 105
   notes: Full Act. Each section is dated by its own source note.
+- doc_id: pa-104-0734
+  title: Public Act 104-0734
+  url: https://www.ilga.gov/Legislation/PublicActs/View/104-0734
+  kind: public_act
+  authority: statute
+  effective_date: '2027-01-01'
+  public_act: '104-0734'
+  amends: cicaa
+  notes: SB3527 (104th GA). Adds CICAA 1-45(j) (a written policy for collecting
+    unpaid assessments, required before legal action to collect) and 1-35(d)(8)
+    (that policy joins the resale disclosures). Section 10 amends the
+    Condominium Property Act, which is not ingested. Passed but not yet in
+    effect when added (2026-10-15); the build skips it once statutes/cicaa is
+    compiled through P.A. 104-734, and it can then be removed.
