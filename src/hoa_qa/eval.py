@@ -7,6 +7,11 @@ Citation quotes are verbatim document text, so they're never scored. The runner
 prints a pass/fail table and the total cost, and fails below a minimum pass
 rate.
 
+Retrieval is reported apart from pass/fail: whether the sweep selected any
+expected chunk (``retrieval_hit``). A failed case whose expected chunk was
+selected failed in drafting or verification; one whose chunk was never
+selected failed in retrieval, and no prompt change will fix it.
+
 The golden questions are committed fixtures, not user input, so the JSON
 report includes the answers for review, and, when the asker supports
 ``ask_traced``, per-case diagnostics (gate score, top sweep scores, passages
@@ -251,6 +256,9 @@ class CaseResult(BaseModel):
     stage_ms: dict[str, float] = Field(default_factory=dict)
     answer_text: str
     conflicts_noted: list[str]
+    # Whether the sweep selected any expected chunk; None when the case expects
+    # no citations or the sweep never ran (see ``retrieval_hit``).
+    retrieval_hit: bool | None = None
     diagnostics: CaseDiagnostics | None = None
 
 
@@ -265,6 +273,9 @@ class EvalReport(BaseModel):
     latency_p95_ms: float
     # Median per pipeline stage, over the cases where that stage ran.
     stage_p50_ms: dict[str, float] = Field(default_factory=dict)
+    # Cases whose sweep selected an expected chunk, of those where it counts.
+    retrieval_hits: int = 0
+    retrieval_cases: int = 0
 
 
 def percentile(values: Sequence[float], fraction: float) -> float:
@@ -333,6 +344,22 @@ def score_case(case: GoldenCase, answer: Answer) -> list[Check]:
     return checks
 
 
+def retrieval_hit(case: GoldenCase, diagnostics: CaseDiagnostics | None) -> bool | None:
+    """Whether the sweep selected any of the case's expected chunks.
+
+    None when there is nothing to measure: the case expects no citations, the
+    asker records no diagnostics, or the gate refused before the sweep ran (an
+    empty ``sweep_top``; a sweep that ran but selected nothing is a miss).
+    The bar is "any of", like ``cites_any_of_expected``: a case that needs two
+    chunks together can still count as a hit with one of them.
+    """
+    if not case.expect_chunk_ids_any or diagnostics is None:
+        return None
+    if not diagnostics.sweep_top:
+        return None
+    return bool(set(diagnostics.selected) & set(case.expect_chunk_ids_any))
+
+
 async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
     """Run every case sequentially (keeps the API rate and spend modest)."""
     results: list[CaseResult] = []
@@ -349,6 +376,7 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
             result = await asker(case.question)
         answer = result.answer
         checks = score_case(case, answer)
+        diagnostics = recorder.data if recorder else None
         total_cost += result.estimated_cost_usd
         results.append(
             CaseResult(
@@ -362,11 +390,13 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
                 stage_ms={k: round(v, 1) for k, v in result.stage_ms.items()},
                 answer_text=answer.answer_text,
                 conflicts_noted=list(answer.conflicts_noted),
-                diagnostics=recorder.data if recorder else None,
+                retrieval_hit=retrieval_hit(case, diagnostics),
+                diagnostics=diagnostics,
             )
         )
     passed = sum(r.passed for r in results)
     latencies = [r.latency_ms for r in results]
+    measured = [r.retrieval_hit for r in results if r.retrieval_hit is not None]
     declared: Any = getattr(asker, "max_cost_usd", None)
     return EvalReport(
         cases=results,
@@ -378,6 +408,8 @@ async def run_eval(golden: GoldenSet, asker: Asker) -> EvalReport:
         latency_p50_ms=percentile(latencies, 0.50),
         latency_p95_ms=percentile(latencies, 0.95),
         stage_p50_ms=_stage_medians(results),
+        retrieval_hits=sum(measured),
+        retrieval_cases=len(measured),
     )
 
 
@@ -395,12 +427,16 @@ def _stage_medians(results: Sequence[CaseResult]) -> dict[str, float]:
 def render_table(report: EvalReport) -> str:
     """A plain-text table: ids, outcomes and failed checks, never answer text."""
     width = max(len(r.id) for r in report.cases)
-    lines = [f"{'case':<{width}}  result  outcome            cost_usd  failed checks"]
+    lines = [
+        f"{'case':<{width}}  result  outcome            retrieved  cost_usd  "
+        "failed checks"
+    ]
     for r in report.cases:
         failed = "; ".join(c.name for c in r.checks if not c.passed)
+        retrieved = {True: "yes", False: "NO", None: "-"}[r.retrieval_hit]
         lines.append(
             f"{r.id:<{width}}  {'PASS' if r.passed else 'FAIL':<6}  "
-            f"{r.outcome.value:<17}  {r.cost_usd:8.5f}  {failed}"
+            f"{r.outcome.value:<17}  {retrieved:<9}  {r.cost_usd:8.5f}  {failed}"
         )
     lines.append("")
     lines.append(
@@ -413,6 +449,11 @@ def render_table(report: EvalReport) -> str:
             else ""
         )
     )
+    if report.retrieval_cases:
+        lines.append(
+            f"retrieval: an expected chunk was selected in {report.retrieval_hits}/"
+            f"{report.retrieval_cases} cases"
+        )
     if report.stage_p50_ms:
         lines.append(
             "stage p50: "

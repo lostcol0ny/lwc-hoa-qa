@@ -13,13 +13,16 @@ from qa_fakes import FINES_DRAFT, FIXTURE, FakeJev, FakeProvider
 from hoa_qa.ask import STAGES, AskResult, QAAsker, QASettings, build_asker
 from hoa_qa.cli import main
 from hoa_qa.eval import (
+    CaseDiagnostics,
     Check,
     GoldenCase,
     GoldenSet,
+    ScoreDiag,
     load_golden,
     missing_chunk_ids,
     percentile,
     read_ids,
+    retrieval_hit,
     score_case,
 )
 from hoa_qa.models import Answer, Citation, Corpus, Outcome, load_corpus
@@ -396,6 +399,9 @@ def test_runner_scores_prints_and_reports_cost(
     assert report["stage_p50_ms"] == {} and "stage p50" not in table
     # The table never prints questions or answers.
     assert FINE_CASE["question"] not in table and "third fine" not in table
+    # Without diagnostics there is no retrieval to measure.
+    assert report["cases"][0]["retrieval_hit"] is None
+    assert report["retrieval_cases"] == 0 and "retrieval:" not in table
 
 
 def test_runner_fails_below_min_pass(
@@ -487,7 +493,10 @@ def test_runner_records_diagnostics_for_traceable_askers(tmp_path: Path) -> None
         asker_factory=lambda corpus, settings: asker,
     )
     assert code == 0
-    [case] = json.loads(out.read_text())["cases"]
+    report = json.loads(out.read_text())
+    [case] = report["cases"]
+    assert case["retrieval_hit"] is True
+    assert (report["retrieval_hits"], report["retrieval_cases"]) == (1, 1)
     diag = case["diagnostics"]
     assert diag["gate_score"] == 0.95
     assert diag["sweep_top"][0] == {
@@ -562,3 +571,27 @@ def test_percentile_is_nearest_rank() -> None:
     assert percentile(values, 0.50) == 10.0
     assert percentile(values, 0.95) == 19.0
     assert percentile([3.0], 0.95) == 3.0
+
+
+def _swept(*selected: str) -> CaseDiagnostics:
+    """Diagnostics of a sweep that ran and selected ``selected``."""
+    return CaseDiagnostics(
+        sweep_top=[
+            ScoreDiag(chunk_id="any", score=0.1, authority="rules", selected=False)
+        ],
+        selected=list(selected),
+    )
+
+
+def test_retrieval_hit_separates_retrieval_from_drafting() -> None:
+    fine = GoldenCase.model_validate(FINE_CASE)
+    assert retrieval_hit(fine, _swept("rules-2016-fines", "rules-2023-fines"))
+    # Selected, but not an expected chunk: a retrieval miss.
+    assert retrieval_hit(fine, _swept("rules-2016-fines")) is False
+    assert retrieval_hit(fine, _swept()) is False
+    # Nothing to measure: no diagnostics, refused before the sweep, or a
+    # case that expects no citations.
+    assert retrieval_hit(fine, None) is None
+    assert retrieval_hit(fine, CaseDiagnostics(gate_passed=False)) is None
+    poem = GoldenCase.model_validate(POEM_CASE)
+    assert retrieval_hit(poem, _swept("rules-2023-fines")) is None

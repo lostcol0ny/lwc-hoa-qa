@@ -287,6 +287,16 @@ writes it to the JSON report under `cases[].diagnostics` (the top 20 sweep
 scores). It's always on because the manual **Eval** workflow has no input
 for it, and the golden questions are committed fixtures, not user input.
 
+From the diagnostics, each answerable case also gets `retrieval_hit`: whether
+the sweep selected any of its `expect_chunk_ids_any`. The table shows it in
+the `retrieved` column (`-` when the gate refused before the sweep ran), and
+the summary line counts the hits. It doesn't change pass/fail. It tells you
+where a failed case broke: a `FAIL` with `retrieved yes` broke in drafting
+or verification, and a `FAIL` with `retrieved NO` broke in retrieval, which
+no prompt change will fix. The bar is "any of", so a case that needs several
+chunks together (a list item and its lead-in) can count as a hit with only
+one of them.
+
 ## Configuration
 
 `QASettings.from_env()` reads these variables. Empty values mean "use the default".
