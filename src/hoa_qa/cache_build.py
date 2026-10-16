@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from hoa_qa.answer.provider import AnswerDraft, DraftCitation, DraftClaim
-from hoa_qa.ask import Asker
+from hoa_qa.ask import PARTIAL_NOTE, Asker
 from hoa_qa.cache import (
     CacheEntry,
     CuratedQuestion,
@@ -106,7 +106,8 @@ def _claims_behind(
 async def build_entries(
     questions: CuratedQuestions, asker: Asker
 ) -> tuple[tuple[CacheEntry, ...], list[BuildRow]]:
-    """Answer every curated question; keep the ones that come out answered.
+    """Answer every curated question; keep the ones that come out answered
+    (a partial answer is not kept).
 
     ``asker`` must be the full pipeline with no cache attached. Questions run
     one at a time, like the eval, to keep the API rate and spend modest.
@@ -127,7 +128,12 @@ async def build_entries(
         else:
             result = await asker(item.question)
         answer = result.answer
-        answered = answer.outcome is Outcome.answered
+        # A partial answer is known to be incomplete, and a cached answer is
+        # served unchanged on every hit, so it is not stored.
+        answered = (
+            answer.outcome is Outcome.answered
+            and PARTIAL_NOTE not in answer.answer_text
+        )
         if answered:
             entries.append(
                 CacheEntry(id=item.id, question=item.question, answer=answer)

@@ -1,6 +1,6 @@
 # Partial answer on the final attempt
 
-Date: 2026-10-16. Status: approved design, not yet built.
+Date: 2026-10-16. Status: built.
 
 ## Problem
 

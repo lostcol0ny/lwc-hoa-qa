@@ -288,7 +288,9 @@ their scores, each claim's verdict.
 - *Tags* (a small fixed set, for filtering and grouping): the outcome
   (`answered`, `not_found`, ...); `cache-hit`, `cache-exact` or `cache-miss`
   when a cache is loaded; `retried` when the answer model was asked twice;
-  `claims-dropped` when the answer carries the "details left out" note; and
+  `claims-dropped` when the answer carries the "details left out" note;
+  `partial` when a final draft stood without an essential claim and carries
+  the "may be incomplete" note; and
   `monitor` for questions asked through the operator monitor, so your own
   testing can be filtered out of resident traffic.
 - *Trace metadata* (filterable keys): `cache_entry`, `reason`, `answer_model`,

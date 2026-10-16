@@ -230,11 +230,12 @@ def test_max_cost_bounds_byte_billing(
     provider = ByteProvider(corpus, max_tokens)
     asker: QAAsker = build_asker(corpus, QASettings(), jev=jev, provider=provider)
     result = asyncio.run(asker(QUESTIONS[question]))
-    # The worst path ran: both answer attempts. In the boundary corpus the
-    # claims cite chunks too large for any support request, so they fail
-    # closed (not_found); elsewhere support runs on both attempts.
+    # The worst path ran: both answer attempts, with support checks on both.
+    # The "exempt" claim always fails, so the final draft stands only
+    # partially, on its verified claims. (In the boundary corpus, claims
+    # citing a chunk too large for any support request fail closed.)
     assert provider.calls == 2
-    assert result.answer.outcome is Outcome.not_found
-    if corpus_name != "boundaries":
-        assert jev.support_calls >= 2
+    assert jev.support_calls >= 2
+    assert result.answer.outcome is Outcome.answered
+    assert "partial" in result.tags
     assert asker.max_cost_usd >= result.estimated_cost_usd > 0
