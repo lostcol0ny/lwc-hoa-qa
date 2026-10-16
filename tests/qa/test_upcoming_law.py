@@ -134,3 +134,25 @@ def test_once_in_effect_it_is_ordinary_law(
         "Does the HOA need a collection policy?",
     ).answer
     assert answer.outcome is Outcome.answered
+
+
+def test_an_answer_quoting_the_act_names_it_and_gets_the_cicaa_note(
+    law_corpus: Corpus, settings: QASettings, jev: FakeJev, upcoming: Chunk
+) -> None:
+    """The disclaimer said "compiled through Public Act 104-433" alone, and the
+    applicability note was missing, on an answer quoting only P.A. 104-0734
+    (eval of 2026-10-15)."""
+    statement = (
+        "Starting January 1, 2099, 765 ILCS 160/1-45(j) will require a written "
+        "collection policy."
+    )
+    provider = FakeProvider([draft(claim(statement, (upcoming.id, POLICY)))])
+    answer = ask(
+        make_asker(law_corpus, settings, jev, provider),
+        "Does the HOA need a collection policy?",
+    ).answer
+    assert (
+        "and Public Act 199-0001 as enacted (effective January 1, 2099), and is "
+        "not legal advice." in answer.answer_text
+    )
+    assert "exempt" in answer.answer_text  # The CICAA applicability note.

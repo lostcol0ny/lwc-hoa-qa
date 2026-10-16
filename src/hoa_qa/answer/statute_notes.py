@@ -12,26 +12,49 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from hoa_qa.models import Chunk, Citation, StatuteCompilation, citation_url
+from hoa_qa.models import (
+    Chunk,
+    Citation,
+    StatuteCompilation,
+    citation_url,
+    from_public_act,
+)
 from hoa_qa.verify.quotes import normalize
 
 # Every statute disclaimer starts with this; the rest names ILGA's copy.
 STATUTE_DISCLAIMER_LEAD = "This quotes Illinois law"
 
 
-def statute_disclaimer(compiled: StatuteCompilation) -> str:
-    """The fixed disclaimer, stating how current ILGA's compiled text is.
+def statute_disclaimer(
+    compiled: StatuteCompilation, cited: Iterable[Chunk] = ()
+) -> str:
+    """The fixed disclaimer, stating how current the quoted law is.
 
     The Public Act and month come from the corpus manifest, which the build
-    fills from the statutes/ snapshot, so a refresh updates them.
+    fills from the statutes/ snapshot, so a refresh updates them. A cited
+    passage from an enacted Act not yet compiled (ingest.acts) is named too,
+    with its effective date: it is newer than ILGA's compiled copy.
     """
     month = MONTHS[compiled.updated_on.month - 1]
+    acts = {
+        f"{chunk.doc_title} as enacted (effective {_long_date(chunk)})": None
+        for chunk in cited
+        if from_public_act(chunk)
+    }
+    # "... (November 2025) and Public Act 104-0734 as enacted (effective
+    # January 1, 2027), and is not legal advice."
+    also = "".join(f" and {act}" for act in acts) + ("," if acts else "")
     return (
         f"{STATUTE_DISCLAIMER_LEAD} as compiled by ILGA through Public Act "
-        f"{compiled.through_public_act} ({month} {compiled.updated_on.year}) and "
-        "is not legal advice. Whether a provision applies to your situation can "
-        "depend on the facts; consult an attorney for advice."
+        f"{compiled.through_public_act} ({month} {compiled.updated_on.year})"
+        f"{also} and is not legal advice. Whether a provision applies to your "
+        "situation can depend on the facts; consult an attorney for advice."
     )
+
+
+def _long_date(chunk: Chunk) -> str:
+    when = chunk.effective_date
+    return f"{MONTHS[when.month - 1]} {when.day}, {when.year}" if when else "unknown"
 
 
 # Not strftime("%B"): that follows the process locale.
@@ -51,6 +74,9 @@ MONTHS = (
 )
 
 CICAA_DOC_ID = "cicaa"
+# How an amending Public Act's own text (doc_id pa-..., ingest.acts) cites
+# the CICAA sections it changes.
+CICAA_CITATION = "765 ILCS 160/"
 EXEMPTION_CHUNK_ID = "cicaa-1-75"
 EXEMPTION_QUOTE = "annual budgeted assessments of $100,000 or less"
 
@@ -132,4 +158,8 @@ def applicability_note(chunks: Iterable[Chunk]) -> ApplicabilityNote:
 
 
 def cites_cicaa(chunks: Iterable[Chunk]) -> bool:
-    return any(chunk.doc_id == CICAA_DOC_ID for chunk in chunks)
+    return any(
+        chunk.doc_id == CICAA_DOC_ID
+        or (from_public_act(chunk) and chunk.citation_label.startswith(CICAA_CITATION))
+        for chunk in chunks
+    )

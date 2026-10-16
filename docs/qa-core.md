@@ -145,6 +145,15 @@ The model never decides whether these appear (`answer/statute_notes.py`):
   says why. The prompt asks for "765 ILCS ... states that ..." phrasing and
   forbids applicability conclusions. Statute claims otherwise go through the
   same quote and support checks as every other claim.
+- Any claim (statute or not) about what the documents do **not** say ("...
+  without a requirement stated in those documents", "the Declaration does not
+  specify ...") fails as `absence_claim` before the support check
+  (`ask._silence_screen`). The prompt already forbade such commentary, but the
+  support check passed one on 2026-10-15: a conclusion drawn from silence reads
+  as supported by the passage that is silent. The pattern needs the silence to
+  be about the documents themselves, so "a shed not approved by the Board"
+  passes; on that day's 29 eval answers and the 62 curated cache claims it
+  matched only the one claim it was written for.
 
 ### Laws not yet in effect
 
@@ -286,6 +295,16 @@ of it.
 writes it to the JSON report under `cases[].diagnostics` (the top 20 sweep
 scores). It's always on because the manual **Eval** workflow has no input
 for it, and the golden questions are committed fixtures, not user input.
+
+From the diagnostics, each answerable case also gets `retrieval_hit`: whether
+the sweep selected any of its `expect_chunk_ids_any`. The table shows it in
+the `retrieved` column (`-` when the gate refused before the sweep ran), and
+the summary line counts the hits. It doesn't change pass/fail. It tells you
+where a failed case broke: a `FAIL` with `retrieved yes` broke in drafting
+or verification, and a `FAIL` with `retrieved NO` broke in retrieval, which
+no prompt change will fix. The bar is "any of", so a case that needs several
+chunks together (a list item and its lead-in) can count as a hit with only
+one of them.
 
 ## Configuration
 
