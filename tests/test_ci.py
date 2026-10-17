@@ -73,9 +73,19 @@ def test_build_corpus_llm_cleanup_is_opt_in() -> None:
     assert '[ "$LLM_CLEANUP" = true ] && [ -n "$ANTHROPIC_API_KEY" ]' in step["run"]
 
 
-def test_eval_workflow_is_manual_and_skips_without_secrets() -> None:
+def test_eval_workflow_is_manual_or_weekly_and_skips_without_secrets() -> None:
     workflow = load_workflow("eval.yml")
-    assert set(workflow[True]) == {"workflow_dispatch"}  # never on push or PRs
+    # Never on push or PRs: each run costs money.
+    assert set(workflow[True]) == {"workflow_dispatch", "schedule"}
+    assert len(workflow[True]["schedule"]) == 1  # weekly, not more often
+    # A scheduled run has no inputs, so both fall back to the defaults.
+    inputs = workflow[True]["workflow_dispatch"]["inputs"]
+    assert workflow["env"]["CORPUS"] == (
+        f"${{{{ inputs.corpus || '{inputs['corpus']['default']}' }}}}"
+    )
+    assert workflow["env"]["MIN_PASS"] == (
+        f"${{{{ inputs.min_pass || '{inputs['min_pass']['default']}' }}}}"
+    )
     job = workflow["jobs"]["eval"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     steps = job["steps"]
