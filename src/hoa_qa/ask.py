@@ -146,6 +146,13 @@ BOARD_REFERRAL = (
 OMITTED_NOTE = (
     "Some details could not be verified against the documents and were left out."
 )
+# For a final draft that stood without an essential claim (``_can_stand_partially``).
+PARTIAL_NOTE = (
+    "Part of this answer could not be verified against the documents and was "
+    "left out, so it may be incomplete."
+)
+# The first draft, and one regeneration.
+ANSWER_ATTEMPTS = 2
 # At most this many related documents are linked from an unverified not_found.
 MAX_RELATED_DOCUMENTS = 5
 
@@ -761,7 +768,7 @@ class QAAsker:
         # Provided passages the model cited, in order, for an unverified
         # not_found's related-document links (never their text).
         cited_ids: list[str] = []
-        for attempt in range(1, 3):
+        for attempt in range(1, ANSWER_ATTEMPTS + 1):
             prompt = build_prompt(
                 cleaned,
                 passages,
@@ -820,24 +827,38 @@ class QAAsker:
             failures = [v for v in verified if not v.ok]
             can_drop = _can_drop(verified)
             clean = not failures and _has_answer(verified)
+            partial = (
+                not clean
+                and not can_drop
+                and attempt == ANSWER_ATTEMPTS
+                and _can_stand_partially(verified)
+            )
             _log_attempt(
                 request_id,
                 attempt,
-                "verified" if clean else "claims_failed",
+                "verified" if clean else "partial" if partial else "claims_failed",
                 note=generated.note,
                 claims=_claim_diagnostics(draft, verified, passage_ids),
                 fallback_eligible=can_drop,
             )
             if clean:
                 # Claims salvage dropped at parse time count as omitted too.
-                return self._answered(draft, verified, dropped=generated.claims_trimmed)
+                note = OMITTED_NOTE if generated.claims_trimmed else None
+                return self._answered(draft, verified, note=note)
             usage.notes.append(f"claims_failed={len(failures)}")
             if can_drop:
                 # The draft stands without its failed claims, so it is used as
                 # it is. Asking again to repair a side detail cost a second
                 # answer-model call (the slowest step, by far) and sometimes
                 # came back worse.
-                return self._answered(draft, verified, dropped=True)
+                return self._answered(draft, verified, note=OMITTED_NOTE)
+            if partial:
+                # Out of attempts, but something the model called essential
+                # verified: show that, flagged as possibly incomplete, rather
+                # than "couldn't verify". The streamed claims are this draft's
+                # verified ones, so nothing on screen is withdrawn.
+                usage.notes.append("partial")
+                return self._answered(draft, verified, note=PARTIAL_NOTE)
             # This draft cannot stand: whatever it showed so far is withdrawn.
             emit({"type": "reset"})
             failed = [
@@ -896,7 +917,7 @@ class QAAsker:
             _trace_verify(span, verified)
         trace.attempt(1, [v.trace for v in verified], "reviewed")
         if all(v.ok for v in verified) and _has_answer(verified):
-            return self._answered(draft, verified, dropped=False)
+            return self._answered(draft, verified, note=None)
         return self._not_found(OutcomeReason.unverified)
 
     async def _lookup(
@@ -1089,12 +1110,13 @@ class QAAsker:
         return verified
 
     def _answered(
-        self, draft: AnswerDraft, verified: Sequence[_Verified], *, dropped: bool
+        self, draft: AnswerDraft, verified: Sequence[_Verified], *, note: str | None
     ) -> _Result:
+        """The verified claims as an answer; ``note`` says what was left out."""
         kept = [v for v in verified if v.ok]
         parts = [v.statement.strip() for v in kept if v.kind == "answer"]
-        if dropped:
-            parts.append(OMITTED_NOTE)
+        if note is not None:
+            parts.append(note)
         if draft.refer_to_board:
             parts.append(BOARD_REFERRAL)
         cited = [checked.chunk for v in kept for checked in v.citations]
@@ -1240,6 +1262,8 @@ def _tags(answer: Answer, usage: _Usage, *, cache_loaded: bool) -> tuple[str, ..
         tags.append("retried")
     if OMITTED_NOTE in answer.answer_text:
         tags.append("claims-dropped")
+    if PARTIAL_NOTE in answer.answer_text:
+        tags.append("partial")
     return tuple(tags)
 
 
@@ -1277,6 +1301,17 @@ def _can_drop(verified: Sequence[_Verified]) -> bool:
     """
     blocking = any(not v.ok and v.essential and v.kind == "answer" for v in verified)
     return _has_answer(verified) and not blocking
+
+
+def _can_stand_partially(verified: Sequence[_Verified]) -> bool:
+    """Final-attempt rule: a draft that can't stand may still stand partially.
+
+    Only on the last attempt, when the alternative is "couldn't verify": at
+    least one essential answer claim verified, so something the model
+    considered central holds. Failed claims are dropped and never shown;
+    a verified non-essential claim alone isn't enough.
+    """
+    return any(v.ok and v.essential and v.kind == "answer" for v in verified)
 
 
 def _citation(checked: CheckedCitation) -> Citation:

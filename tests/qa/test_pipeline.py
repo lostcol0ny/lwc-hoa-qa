@@ -194,7 +194,9 @@ def test_failed_essential_claim_is_not_found(
         ("rules-2023-fines", "2nd violation: $75."),
         essential=True,
     )
-    bad = draft(FINE_CLAIM, essential_invention)
+    # With another essential claim verified, the final draft would stand
+    # partially (test_partial_answers.py); here nothing essential holds.
+    bad = draft(essential_invention)
     provider = FakeProvider([bad, bad])
     result = ask(make_asker(corpus, settings, jev, provider))
     assert result.answer.outcome is Outcome.not_found

@@ -49,8 +49,18 @@ uv run hoa-qa ask "..." --corpus corpus.json --json   # full AskResult
     `answered`, and `OMITTED_NOTE` is appended.
 
   A draft that can stand is used at once, on the first attempt too. Only a
-  draft that cannot stand is regenerated, and if the second one cannot stand
-  either the result is `not_found`. Until 2026-10-11 any failed claim
+  draft that cannot stand is regenerated. If the second one cannot stand
+  either, it may still stand as a **partial answer** when at least one
+  essential `answer` claim verified: its failed claims are dropped and
+  `PARTIAL_NOTE` ("…so it may be incomplete") is appended instead of
+  `OMITTED_NOTE`. Otherwise the result is `not_found`. The model over-applies
+  `essential` (it marked informal newsletter quotes essential, which can never
+  be shown as current fact), and in the 2026-10-15 evals two questions ended
+  "couldn't verify" although the second draft's verified claims answered them
+  (docs/specs/2026-10-16-partial-answer-on-final-attempt.md). The first draft
+  is still regenerated rather than kept partially: the retry stays the first
+  remedy. A partial answer is never stored by `cache build`, since a cached
+  answer is served unchanged. Until 2026-10-11 any failed claim
   triggered a retry, to repair side details; that cost a second answer-model
   call (the slowest step by far: a median 12.7 s against 4.1 s in the
   2026-10-10 eval) on 8 of 26 questions, 5 of which could already stand, and
@@ -480,15 +490,16 @@ never ran is 0, and `cache_ms` overlaps `gate_ms` because the two run together),
 `jev_input_tokens`,
 `answer_model`, `answer_calls`, `answer_input_tokens`, `answer_output_tokens`,
 `citations`, `estimated_cost_usd`, `notes` (`invalid_draft`, `no_claims`,
-`claims_failed=N`, `cache_hit`, `cache_exact`,
+`claims_failed=N`, `partial`, `cache_hit`, `cache_exact`,
 `cache_error`), `cache` (the curated entry id served, or empty), and `reason`.
 
 Two diagnostics records explain a `not_found`:
 
 - `ask sweep` (`record.hoa_qa_sweep`): the selected chunk IDs and scores.
 - `ask attempt` (`record.hoa_qa_attempt`), one per answer-model call:
-  `attempt`, `terminal` (`verified`, `claims_failed`, `invalid_draft`,
-  `no_claims`), `fallback_eligible` (the drop rule would let it stand),
+  `attempt`, `terminal` (`verified`, `partial` (a final draft standing
+  partially), `claims_failed`, `invalid_draft`, `no_claims`),
+  `fallback_eligible` (the drop rule would let it stand),
   the provider's parse `note` (schema field paths and Pydantic error types;
   a key the model wrote, such as an extra field, becomes `<extra>`), an invalid
   draft's `issues` (claim number and code), and per claim: `index`, `kind`,
