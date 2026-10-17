@@ -1,7 +1,12 @@
 name: Eval
-# Manual golden eval against the real APIs (spec §7). Costs a few cents per
-# run; see README "Cost model". Never runs on push or pull_request.
+# Golden eval against the real APIs (spec §7). About $0.55 per run; see
+# README "Cost model". Manual, plus weekly on main to catch drift in the
+# models it depends on (Jev, the answer model). Never runs on push or
+# pull_request.
 on:
+  schedule:
+    # Mondays 14:23 UTC (morning in Illinois). Scheduled runs use main.
+    - cron: '23 14 * * 1'
   workflow_dispatch:
     inputs:
       corpus:
@@ -17,6 +22,10 @@ permissions:
   contents: read
 env:
   UV_LOCKED: "1"
+  # A scheduled run has no inputs: it evaluates what production serves (the
+  # latest corpus artifact) at the default bar.
+  CORPUS: ${{ inputs.corpus || 'artifact' }}
+  MIN_PASS: ${{ inputs.min_pass || '0.85' }}
 concurrency:
   group: eval
   cancel-in-progress: false
@@ -58,7 +67,7 @@ jobs:
       - run: uv sync --locked
         if: steps.secrets.outputs.enabled == 'true'
       - name: Download latest corpus artifact
-        if: steps.secrets.outputs.enabled == 'true' && inputs.corpus == 'artifact'
+        if: steps.secrets.outputs.enabled == 'true' && env.CORPUS == 'artifact'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -73,7 +82,7 @@ jobs:
           test -f build/corpus.json
           echo "Corpus: build-corpus run $run_id" >> "$GITHUB_STEP_SUMMARY"
       - name: Build corpus (no LLM cleanup)
-        if: steps.secrets.outputs.enabled == 'true' && inputs.corpus == 'build'
+        if: steps.secrets.outputs.enabled == 'true' && env.CORPUS == 'build'
         run: |
           uv run python -m hoa_qa.ingest build --out build/ --no-llm
           echo "Corpus: built in this run (--no-llm)" >> "$GITHUB_STEP_SUMMARY"
@@ -82,7 +91,6 @@ jobs:
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MIN_PASS: ${{ inputs.min_pass }}
           # Optional: with these set, each golden question is traced to
           # Langfuse (docs/web-ops.md, "Tracing"). The golden questions are
           # committed fixtures, so their text is included.

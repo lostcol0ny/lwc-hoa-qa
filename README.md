@@ -161,6 +161,11 @@ A refused off-topic question costs only the gate; invalid, rate-limited and
 budget-exhausted requests cost nothing. A regenerated answer can roughly double
 the cost.
 
+**The Eval workflow** (29 golden questions) costs about $0.55 a run. It runs
+weekly on main (Mondays, about $2.40 a month), to catch drift in Jev or the
+answer model, and on demand. It calls the APIs with the repository secrets,
+outside the web app's monthly budget.
+
 **The reservation R.** Before calling the pipeline, the web app atomically
 reserves `R = max(BUDGET_RESERVE_PER_REQUEST_USD, asker.max_cost_usd)` from the
 month's budget, then reconciles to the actual cost afterwards. `max_cost_usd` is
