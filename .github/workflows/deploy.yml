@@ -89,7 +89,7 @@ jobs:
           done
           mv corpus-artifact/corpus.json corpus-artifact/corpus_manifest.json .
           echo "Using corpus from build-corpus run $run_id" >> "$GITHUB_STEP_SUMMARY"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         if: steps.corpus.outputs.run_id != ''
         with:
           python-version: '3.12'
