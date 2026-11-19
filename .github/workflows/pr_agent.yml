@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_LOCKED: "1"
+
 jobs:
   pr_agent:
     # Bot senders (Dependabot, scheduled scrape PRs) get no Actions secrets and
